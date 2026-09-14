@@ -1,0 +1,9 @@
+{
+  "driverId": "drawdy.serene",
+  "driverName": "Serene",
+  "driverVersion": "0.1.0",
+  "description": "Play your drawing. Right-click anything and pick Serene play: a playhead sweeps the frame at a constant rate and every stroke it crosses rings out as a sine tone, snapped to a C pentatonic scale from C4 at the bottom to C7 at the top.",
+  "icon": "assets/serene-icon-256.webp",
+  "main": "main.js",
+  "permissions": ["dom", "scene"]
+}
