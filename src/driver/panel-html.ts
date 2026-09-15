@@ -616,6 +616,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PERCUSSIVE_TAU = 0.32;
+    var GLIDE_PORTION = 0.35;
+    var MAX_GLIDE = 0.3;
     var PEAK_GAIN = 0.2;
     var LIMIT_THRESHOLD = -3;
     var LIMIT_RATIO = 20;
@@ -739,7 +741,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             var when = at + pitches[i].t;
             if (when <= prevTime) continue;
             var span = when - prevTime;
-            var slide = allowGlide ? span : 0;
+            var slide = allowGlide ? Math.min(span * GLIDE_PORTION, MAX_GLIDE) : 0;
             if (slide > 0.004) {
                 if (slide < span) {
                     osc.frequency.setValueAtTime(prevHz, when - slide);

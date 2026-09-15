@@ -91,8 +91,9 @@ itself starts a new voice at the turn, because the playhead has already passed
 that x.
 
 Pitch breakpoints land on the column grid, so every step is a scale degree, and
-a stroke slides continuously from one breakpoint to the next — a portamento
-that passes through the pitches in between, exactly following the ink.
+a stroke lands on each degree and then slides into the next one over the last
+third of the gap, so you hear the notes the ink crosses and a short portamento
+between them rather than a continuous sweep.
 
 The region is rasterized onto a grid of the scale's pitch rows by
 `durationSec * stepsPerSecond` columns, which drives note timing and the voice
