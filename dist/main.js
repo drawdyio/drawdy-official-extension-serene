@@ -1330,8 +1330,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
             progressTimer = setInterval(tickProgress, PROGRESS_MS);
-            pump();
             reconcileVoices();
+            pump();
             render();
         });
     }
