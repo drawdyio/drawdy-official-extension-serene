@@ -36,7 +36,9 @@ type Point = { x: number; y: number };
 type Size = { width: number; height: number };
 
 export function isSereneFrame(el: SubscribedDrawdyElement): boolean {
-    return el.type === "frame" && el.meta?.[SERENE_META_KEY] === true;
+    if (el.type !== "frame") return false;
+    const marker = el.meta?.[SERENE_META_KEY];
+    return marker === true || (typeof marker === "object" && marker !== null);
 }
 
 export function sereneFrameSchema(

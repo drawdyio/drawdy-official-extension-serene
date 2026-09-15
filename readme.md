@@ -53,9 +53,9 @@ the Serene frame under the cursor.
 ## What gets played
 
 The region is the frame's bounds. Everything intersecting that region becomes
-ink, and each element's opacity sets the loudness of the voices it produces, so a
-stroke at 50% opacity plays at half volume and a fully transparent one is
-silent. Laser pointer trails count as ink while they are visible: draw with the
+ink, and each element's opacity sets the loudness of the voices it produces on a squared
+taper — 50% opacity is about 12 dB quieter, 25% about 24 dB — and a fully
+transparent one is silent. Laser pointer trails count as ink while they are visible: draw with the
 laser inside a playing frame and the trail sounds until it fades. The score follows the board live: drawing, moving or deleting anything
 inside the frame, or moving the frame itself, rebuilds the score, and while the
 frame is playing the new voices are slotted in ahead of the playhead so a stroke

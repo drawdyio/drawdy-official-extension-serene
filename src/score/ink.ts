@@ -14,10 +14,12 @@ export function elementGlides(el: SubscribedDrawdyElement): boolean {
     );
 }
 
+const OPACITY_CURVE = 2;
+
 export function elementGain(el: SubscribedDrawdyElement): number {
     const opacity = el.opacity;
     if (typeof opacity !== "number" || !Number.isFinite(opacity)) return 1;
-    return Math.min(1, Math.max(0, opacity));
+    return Math.pow(Math.min(1, Math.max(0, opacity)), OPACITY_CURVE);
 }
 
 export function elementBounds(el: SubscribedDrawdyElement): Rect | null {

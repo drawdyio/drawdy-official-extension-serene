@@ -1454,12 +1454,26 @@ class Playhead {
     _rect = null;
     _inFlight = false;
     _pendingX = null;
+    _lastX = null;
     constructor(_ctx, _styling) {
         this._ctx = _ctx;
         this._styling = _styling;
     }
     setStyling(styling) {
         this._styling = styling;
+        const rect = this._rect;
+        if (!this._previewId || !rect)
+            return;
+        void this._ctx.issueCommand({
+            type: "command:scene:update-drawdy-preview-elements",
+            ...stamp(this._ctx),
+            req: {
+                elements: [
+                    this._regionSchema(rect),
+                    this._lineSchema(rect, this._lastX ?? rect.x),
+                ],
+            },
+        });
     }
     get _lineId() {
         return `${this._ctx.driverId}:playhead-line`;
@@ -1512,6 +1526,7 @@ class Playhead {
         }));
         this._previewId = previewId;
         this._rect = rect;
+        this._lastX = rect.x;
     }
     move(x) {
         if (!this._previewId || !this._rect)
@@ -1527,6 +1542,7 @@ class Playhead {
             return;
         const x = this._pendingX;
         this._pendingX = null;
+        this._lastX = x;
         this._inFlight = true;
         try {
             await this._ctx.issueCommand({
@@ -1543,6 +1559,7 @@ class Playhead {
     }
     async hide() {
         this._pendingX = null;
+        this._lastX = null;
         this._rect = null;
         const previewId = this._previewId;
         this._previewId = null;
@@ -1644,11 +1661,12 @@ function elementGlides(el) {
     return (el.type === "freedraw" ||
         STROKE_COMPONENT_TYPES.has(el.componentType ?? ""));
 }
+const OPACITY_CURVE = 2;
 function elementGain(el) {
     const opacity = el.opacity;
     if (typeof opacity !== "number" || !Number.isFinite(opacity))
         return 1;
-    return Math.min(1, Math.max(0, opacity));
+    return Math.pow(Math.min(1, Math.max(0, opacity)), OPACITY_CURVE);
 }
 function elementBounds(el) {
     const { x, y, width, height } = el;
@@ -2039,7 +2057,10 @@ const BOUNDS_PROPERTIES = [
     "height",
 ];
 function isSereneFrame(el) {
-    return el.type === "frame" && el.meta?.[SERENE_META_KEY] === true;
+    if (el.type !== "frame")
+        return false;
+    const marker = el.meta?.[SERENE_META_KEY];
+    return marker === true || (typeof marker === "object" && marker !== null);
 }
 function sereneFrameSchema(id, origin) {
     return {

@@ -14,6 +14,7 @@ export class Playhead {
     private _rect: Rect | null = null;
     private _inFlight = false;
     private _pendingX: number | null = null;
+    private _lastX: number | null = null;
 
     public constructor(
         private readonly _ctx: Ctx,
@@ -22,6 +23,18 @@ export class Playhead {
 
     public setStyling(styling: ModuleStyling): void {
         this._styling = styling;
+        const rect = this._rect;
+        if (!this._previewId || !rect) return;
+        void this._ctx.issueCommand({
+            type: "command:scene:update-drawdy-preview-elements",
+            ...stamp(this._ctx),
+            req: {
+                elements: [
+                    this._regionSchema(rect),
+                    this._lineSchema(rect, this._lastX ?? rect.x),
+                ],
+            },
+        });
     }
 
     private get _lineId(): string {
@@ -81,6 +94,7 @@ export class Playhead {
         );
         this._previewId = previewId;
         this._rect = rect;
+        this._lastX = rect.x;
     }
 
     public move(x: number): void {
@@ -95,6 +109,7 @@ export class Playhead {
         if (!rect || this._pendingX === null) return;
         const x = this._pendingX;
         this._pendingX = null;
+        this._lastX = x;
         this._inFlight = true;
         try {
             await this._ctx.issueCommand({
@@ -110,6 +125,7 @@ export class Playhead {
 
     public async hide(): Promise<void> {
         this._pendingX = null;
+        this._lastX = null;
         this._rect = null;
         const previewId = this._previewId;
         this._previewId = null;
