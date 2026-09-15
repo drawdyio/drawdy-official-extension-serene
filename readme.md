@@ -9,16 +9,17 @@ across the frame at a constant rate — a wider region
 takes proportionally longer — and every stroke it crosses rings out as a sine
 tone with a short, tunable attack, then decaying into a long reverb tail.
 
-Pitch comes from height: the bottom of the region is **C4**, the top is **C7**,
-and everything between snaps to a rung of the chosen scale, so nothing lands on
+Pitch comes from height: by default the bottom of the region is **C4** and the
+top is **C7**, and the panel's **Range** row lets you move either end anywhere
+from C1 to C8. Everything between snaps to a rung of the chosen scale, so nothing lands on
 an interval you did not ask for no matter what you drew.
 
 ## Scales
 
-Pick one in the panel. Every scale spans the same three octaves, C4 to C7, so
-switching changes the colour and the number of rungs, never the range.
+Pick one in the panel. Every scale spans the same octave range, so switching
+changes the colour and the number of rungs, never the range.
 
-| Scale | Degrees | Rows |
+| Scale | Degrees | Rows (C4 to C7) |
 | --- | --- | --- |
 | C major pentatonic (default) | C D E G A | 16 |
 | C major | C D E F G A B | 22 |

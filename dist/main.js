@@ -45,32 +45,52 @@ const SCALES = [
     { id: "japanese", name: "Japanese hirajoshi", steps: [0, 2, 3, 7, 8] },
 ];
 const DEFAULT_SCALE_ID = "major-pentatonic";
-const BOTTOM_MIDI = 60;
-const OCTAVES = 3;
+const MIN_OCTAVE = 1;
+const MAX_OCTAVE = 8;
+const DEFAULT_RANGE = { lowOctave: 4, highOctave: 7 };
+function normalizeRange(lowOctave, highOctave, fallback = DEFAULT_RANGE) {
+    const clampOctave = (value, alt) => typeof value === "number" && Number.isFinite(value)
+        ? Math.min(MAX_OCTAVE, Math.max(MIN_OCTAVE, Math.round(value)))
+        : alt;
+    let low = clampOctave(lowOctave, fallback.lowOctave);
+    let high = clampOctave(highOctave, fallback.highOctave);
+    if (low >= high) {
+        if (low >= MAX_OCTAVE)
+            low = MAX_OCTAVE - 1;
+        high = low + 1;
+    }
+    return { lowOctave: low, highOctave: high };
+}
+function bottomMidi(range) {
+    return 12 * (range.lowOctave + 1);
+}
+function octaveSpan(range) {
+    return range.highOctave - range.lowOctave;
+}
 function getScale(id) {
     return (SCALES.find((scale) => scale.id === id) ??
         SCALES.find((scale) => scale.id === DEFAULT_SCALE_ID));
 }
-function scaleRows(scale) {
-    return scale.steps.length * OCTAVES + 1;
+function scaleRows(scale, range) {
+    return scale.steps.length * octaveSpan(range) + 1;
 }
-function rowToMidi(scale, row) {
-    const rows = scaleRows(scale);
+function rowToMidi(scale, range, row) {
+    const rows = scaleRows(scale, range);
     const clamped = Math.max(0, Math.min(rows - 1, Math.round(row)));
     const octave = Math.floor(clamped / scale.steps.length);
     const step = scale.steps[clamped % scale.steps.length];
-    return BOTTOM_MIDI + octave * 12 + step;
+    return bottomMidi(range) + octave * 12 + step;
 }
 function midiToHz(midi) {
     return 440 * Math.pow(2, (midi - 69) / 12);
 }
-function rowToHz(scale, row) {
-    return midiToHz(rowToMidi(scale, row));
+function rowToHz(scale, range, row) {
+    return midiToHz(rowToMidi(scale, range, row));
 }
-function yToRow(scale, y, top, height) {
+function yToRow(scale, range, y, top, height) {
     if (height <= 0)
         return 0;
-    const rows = scaleRows(scale);
+    const rows = scaleRows(scale, range);
     const fromBottom = 1 - (y - top) / height;
     return Math.max(0, Math.min(rows - 1, Math.floor(fromBottom * rows)));
 }
@@ -397,7 +417,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     <header>
         <svg class="mark" viewBox="0 0 28 16" aria-hidden="true"><path d="M1 8c3.2-7.5 6.4-7.5 9.6 0s6.4 7.5 9.6 0 4.6-3.4 6.8 0"/></svg>
         <div class="brand">Serene</div>
-        <div class="chip">C4&ndash;C7</div>
+        <div class="chip" id="range-chip">C4&ndash;C7</div>
     </header>
 
     <div class="hero">
@@ -420,6 +440,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         <div class="row">
             <label for="scale">Scale</label>
             <select id="scale"></select>
+        </div>
+        <div class="row">
+            <label for="low">Range</label>
+            <select id="low" aria-label="Lowest octave"></select>
+            <span class="val" style="width:auto">to</span>
+            <select id="high" aria-label="Highest octave"></select>
         </div>
     </section>
 
@@ -446,6 +472,29 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var loopBtn = document.getElementById("loop");
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
+    var lowSelect = document.getElementById("low");
+    var highSelect = document.getElementById("high");
+    var rangeChip = document.getElementById("range-chip");
+    var MIN_OCTAVE = 1;
+    var MAX_OCTAVE = 8;
+
+    function fillOctaves(select, from, to) {
+        select.textContent = "";
+        for (var octave = from; octave <= to; octave++) {
+            var option = document.createElement("option");
+            option.value = String(octave);
+            option.textContent = "C" + octave;
+            select.appendChild(option);
+        }
+    }
+    fillOctaves(lowSelect, MIN_OCTAVE, MAX_OCTAVE - 1);
+    fillOctaves(highSelect, MIN_OCTAVE + 1, MAX_OCTAVE);
+
+    function showRange(low, high) {
+        lowSelect.value = String(low);
+        highSelect.value = String(high);
+        rangeChip.textContent = "C" + low + "\u2013C" + high;
+    }
     var rack = document.getElementById("rack");
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
@@ -1237,6 +1286,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             applyKnob(knobs.speed, values.speed, false, true);
         }
         if (typeof values.loop === "boolean") setLoop(values.loop, false);
+        if (typeof values.lowOctave === "number" && typeof values.highOctave === "number") {
+            showRange(values.lowOctave, values.highOctave);
+        }
         if (audio) {
             audio.master.gain.value = Number(volumeInput.value);
             audio.wet.gain.value = Number(reverbInput.value);
@@ -1250,6 +1302,20 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     reverbInput.addEventListener("input", function () {
         if (audio) audio.wet.gain.value = Number(reverbInput.value);
     });
+
+    function postRange(changed) {
+        var low = Number(lowSelect.value);
+        var high = Number(highSelect.value);
+        if (low >= high) {
+            if (changed === "low") high = Math.min(MAX_OCTAVE, low + 1);
+            else low = Math.max(MIN_OCTAVE, high - 1);
+        }
+        showRange(low, high);
+        api.postMessage({ type: "range", low: low, high: high });
+    }
+
+    lowSelect.addEventListener("change", function () { postRange("low"); });
+    highSelect.addEventListener("change", function () { postRange("high"); });
 
     scaleSelect.addEventListener("change", function () {
         api.postMessage({ type: "scale", value: scaleSelect.value });
@@ -1296,6 +1362,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (playing) stop("stopped");
         score = msg.score;
         if (scaleSelect.options.length > 0) scaleSelect.value = score.scaleId;
+        showRange(score.lowOctave, score.highOctave);
         applyKnob(knobs.speed, score.pxPerSecond, false, true);
         elapsed = 0;
         playBtn.disabled = score.voices.length === 0;
@@ -1329,7 +1396,7 @@ const serializeVoice = (score) => (voice) => ({
     v: voice.velocity,
     pitches: voice.pitches.map((pitch) => ({
         t: pitch.t,
-        hz: rowToHz(score.scale, pitch.row),
+        hz: rowToHz(score.scale, score.range, pitch.row),
         row: pitch.row,
     })),
 });
@@ -1342,6 +1409,8 @@ function serializeScore(score, elementCount) {
         elementCount,
         scaleId: score.scale.id,
         scaleName: score.scale.name,
+        lowOctave: score.range.lowOctave,
+        highOctave: score.range.highOctave,
         voices: score.voices.map(serializeVoice(score)),
     };
 }
@@ -1674,6 +1743,8 @@ const DEFAULT_SCORE_OPTIONS = {
     stepsPerSecond: 8,
     maxVoices: 5,
     scale: DEFAULT_SCALE_ID,
+    lowOctave: DEFAULT_RANGE.lowOctave,
+    highOctave: DEFAULT_RANGE.highOctave,
 };
 const MIN_PX_PER_SECOND = 40;
 const MAX_PX_PER_SECOND = 900;
@@ -1693,13 +1764,15 @@ class Grid {
     _rect;
     columns;
     _scale;
+    _range;
     cells;
     rows;
-    constructor(_rect, columns, _scale) {
+    constructor(_rect, columns, _scale, _range) {
         this._rect = _rect;
         this.columns = columns;
         this._scale = _scale;
-        this.rows = scaleRows(_scale);
+        this._range = _range;
+        this.rows = scaleRows(_scale, _range);
         this.cells = new Array(columns * this.rows).fill(0);
     }
     get colWidth() {
@@ -1719,7 +1792,7 @@ class Grid {
         const column = Math.max(0, Math.min(this.columns - 1, Math.floor((x - rect.x) / this.colWidth)));
         return {
             column,
-            row: yToRow(this._scale, y, rect.y, rect.height),
+            row: yToRow(this._scale, this._range, y, rect.y, rect.height),
         };
     }
     hit(cell) {
@@ -1835,11 +1908,9 @@ function buildVoices(ink, grid, stepSec, maxVoices) {
     return kept;
 }
 function buildScore(rect, ink, options = {}) {
-    const { pxPerSecond, stepsPerSecond, maxVoices, scale } = {
-        ...DEFAULT_SCORE_OPTIONS,
-        ...options,
-    };
+    const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave } = { ...DEFAULT_SCORE_OPTIONS, ...options };
     const resolved = getScale(scale);
+    const range = normalizeRange(lowOctave, highOctave);
     const speed = clampSpeed(pxPerSecond);
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
@@ -1847,11 +1918,12 @@ function buildScore(rect, ink, options = {}) {
     const columns = Math.max(1, Math.min(MAX_COLUMNS, Math.round(durationSec * stepsPerSecond)));
     const stepSec = durationSec / columns;
     const normalized = { x: rect.x, y: rect.y, width, height };
-    const grid = new Grid(normalized, columns, resolved);
+    const grid = new Grid(normalized, columns, resolved, range);
     const voices = buildVoices(ink, grid, stepSec, maxVoices);
     return {
         rect: normalized,
         scale: resolved,
+        range,
         pxPerSecond: speed,
         durationSec,
         columns,
@@ -2139,6 +2211,8 @@ const DEFAULT_SETTINGS = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
     scale: DEFAULT_SCALE_ID,
     loop: false,
+    lowOctave: DEFAULT_RANGE.lowOctave,
+    highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
     volume: 0.7,
     glide: 0.3,
@@ -2173,6 +2247,7 @@ function sanitizeSettings(raw) {
         speed,
         scale,
         loop: raw.loop === true,
+        ...normalizeRange(raw.lowOctave, raw.highOctave),
     };
 }
 async function loadSettings(ctx) {
@@ -2403,6 +2478,13 @@ class SereneSession {
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "range":
+                this._updateSettings(normalizeRange(message.low, message.high, this._settings));
+                if (!this._rect)
+                    return;
+                this._rebuild();
+                this._postScore(false, true);
+                return;
             case "loop":
                 this._updateSettings({ loop: message.value === true });
                 return;
@@ -2431,6 +2513,8 @@ class SereneSession {
         this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
             pxPerSecond: this._settings.speed,
             scale: this._settings.scale,
+            lowOctave: this._settings.lowOctave,
+            highOctave: this._settings.highOctave,
         });
     }
     _postScore(autoplay, live = false) {

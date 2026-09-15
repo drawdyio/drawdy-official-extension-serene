@@ -1,7 +1,7 @@
 import { ModuleStyling, SubscribedDrawdyElement } from "@drawdy/driver-protocol";
 import { Rect, rectsOverlap } from "../score/geometry";
 import { Ink, elementBounds, laserInk, sceneInk } from "../score/ink";
-import { getScale } from "../score/pitch";
+import { getScale, normalizeRange } from "../score/pitch";
 import { Score, buildScore, clampSpeed, playheadX } from "../score/score";
 import { Ctx } from "./context";
 import { addSereneFrame, listSereneFrames } from "./frames";
@@ -237,6 +237,14 @@ export class SereneSession {
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "range":
+                this._updateSettings(
+                    normalizeRange(message.low, message.high, this._settings)
+                );
+                if (!this._rect) return;
+                this._rebuild();
+                this._postScore(false, true);
+                return;
             case "loop":
                 this._updateSettings({ loop: message.value === true });
                 return;
@@ -263,6 +271,8 @@ export class SereneSession {
         this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
             pxPerSecond: this._settings.speed,
             scale: this._settings.scale,
+            lowOctave: this._settings.lowOctave,
+            highOctave: this._settings.highOctave,
         });
     }
 

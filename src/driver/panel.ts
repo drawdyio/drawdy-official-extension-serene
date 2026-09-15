@@ -32,6 +32,8 @@ export type SerializedScore = {
     elementCount: number;
     scaleId: string;
     scaleName: string;
+    lowOctave: number;
+    highOctave: number;
 };
 
 export type ScaleOption = { id: string; name: string };
@@ -46,6 +48,7 @@ export type PanelToDriver =
     | { type: "speed"; value: number }
     | { type: "knobs"; values: Record<string, unknown> }
     | { type: "loop"; value: boolean }
+    | { type: "range"; low: number; high: number }
     | { type: "add-frame" };
 
 export type DriverToPanel =
@@ -75,7 +78,7 @@ const serializeVoice =
         v: voice.velocity,
         pitches: voice.pitches.map((pitch) => ({
             t: pitch.t,
-            hz: rowToHz(score.scale, pitch.row),
+            hz: rowToHz(score.scale, score.range, pitch.row),
             row: pitch.row,
         })),
     });
@@ -92,6 +95,8 @@ export function serializeScore(
         elementCount,
         scaleId: score.scale.id,
         scaleName: score.scale.name,
+        lowOctave: score.range.lowOctave,
+        highOctave: score.range.highOctave,
         voices: score.voices.map(serializeVoice(score)),
     };
 }

@@ -1,4 +1,10 @@
-import { DEFAULT_SCALE_ID, ScaleId, getScale } from "../score/pitch";
+import {
+    DEFAULT_RANGE,
+    DEFAULT_SCALE_ID,
+    ScaleId,
+    getScale,
+    normalizeRange,
+} from "../score/pitch";
 import { DEFAULT_SCORE_OPTIONS, clampSpeed } from "../score/score";
 import { Ctx, stamp } from "./context";
 
@@ -15,12 +21,16 @@ export type SereneSettings = KnobSettings & {
     speed: number;
     scale: ScaleId;
     loop: boolean;
+    lowOctave: number;
+    highOctave: number;
 };
 
 export const DEFAULT_SETTINGS: SereneSettings = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
     scale: DEFAULT_SCALE_ID,
     loop: false,
+    lowOctave: DEFAULT_RANGE.lowOctave,
+    highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
     volume: 0.7,
     glide: 0.3,
@@ -62,6 +72,7 @@ export function sanitizeSettings(raw: Record<string, unknown>): SereneSettings {
         speed,
         scale,
         loop: raw.loop === true,
+        ...normalizeRange(raw.lowOctave, raw.highOctave),
     };
 }
 

@@ -320,7 +320,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     <header>
         <svg class="mark" viewBox="0 0 28 16" aria-hidden="true"><path d="M1 8c3.2-7.5 6.4-7.5 9.6 0s6.4 7.5 9.6 0 4.6-3.4 6.8 0"/></svg>
         <div class="brand">Serene</div>
-        <div class="chip">C4&ndash;C7</div>
+        <div class="chip" id="range-chip">C4&ndash;C7</div>
     </header>
 
     <div class="hero">
@@ -343,6 +343,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         <div class="row">
             <label for="scale">Scale</label>
             <select id="scale"></select>
+        </div>
+        <div class="row">
+            <label for="low">Range</label>
+            <select id="low" aria-label="Lowest octave"></select>
+            <span class="val" style="width:auto">to</span>
+            <select id="high" aria-label="Highest octave"></select>
         </div>
     </section>
 
@@ -369,6 +375,29 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var loopBtn = document.getElementById("loop");
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
+    var lowSelect = document.getElementById("low");
+    var highSelect = document.getElementById("high");
+    var rangeChip = document.getElementById("range-chip");
+    var MIN_OCTAVE = 1;
+    var MAX_OCTAVE = 8;
+
+    function fillOctaves(select, from, to) {
+        select.textContent = "";
+        for (var octave = from; octave <= to; octave++) {
+            var option = document.createElement("option");
+            option.value = String(octave);
+            option.textContent = "C" + octave;
+            select.appendChild(option);
+        }
+    }
+    fillOctaves(lowSelect, MIN_OCTAVE, MAX_OCTAVE - 1);
+    fillOctaves(highSelect, MIN_OCTAVE + 1, MAX_OCTAVE);
+
+    function showRange(low, high) {
+        lowSelect.value = String(low);
+        highSelect.value = String(high);
+        rangeChip.textContent = "C" + low + "\u2013C" + high;
+    }
     var rack = document.getElementById("rack");
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
@@ -1160,6 +1189,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             applyKnob(knobs.speed, values.speed, false, true);
         }
         if (typeof values.loop === "boolean") setLoop(values.loop, false);
+        if (typeof values.lowOctave === "number" && typeof values.highOctave === "number") {
+            showRange(values.lowOctave, values.highOctave);
+        }
         if (audio) {
             audio.master.gain.value = Number(volumeInput.value);
             audio.wet.gain.value = Number(reverbInput.value);
@@ -1173,6 +1205,20 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     reverbInput.addEventListener("input", function () {
         if (audio) audio.wet.gain.value = Number(reverbInput.value);
     });
+
+    function postRange(changed) {
+        var low = Number(lowSelect.value);
+        var high = Number(highSelect.value);
+        if (low >= high) {
+            if (changed === "low") high = Math.min(MAX_OCTAVE, low + 1);
+            else low = Math.max(MIN_OCTAVE, high - 1);
+        }
+        showRange(low, high);
+        api.postMessage({ type: "range", low: low, high: high });
+    }
+
+    lowSelect.addEventListener("change", function () { postRange("low"); });
+    highSelect.addEventListener("change", function () { postRange("high"); });
 
     scaleSelect.addEventListener("change", function () {
         api.postMessage({ type: "scale", value: scaleSelect.value });
@@ -1219,6 +1265,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (playing) stop("stopped");
         score = msg.score;
         if (scaleSelect.options.length > 0) scaleSelect.value = score.scaleId;
+        showRange(score.lowOctave, score.highOctave);
         applyKnob(knobs.speed, score.pxPerSecond, false, true);
         elapsed = 0;
         playBtn.disabled = score.voices.length === 0;

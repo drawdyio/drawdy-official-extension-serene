@@ -27,9 +27,37 @@ export const SCALES: Scale[] = [
 
 export const DEFAULT_SCALE_ID: ScaleId = "major-pentatonic";
 
-export const BOTTOM_MIDI = 60;
+export type PitchRange = { lowOctave: number; highOctave: number };
 
-export const OCTAVES = 3;
+export const MIN_OCTAVE = 1;
+export const MAX_OCTAVE = 8;
+export const DEFAULT_RANGE: PitchRange = { lowOctave: 4, highOctave: 7 };
+
+export function normalizeRange(
+    lowOctave: unknown,
+    highOctave: unknown,
+    fallback: PitchRange = DEFAULT_RANGE
+): PitchRange {
+    const clampOctave = (value: unknown, alt: number): number =>
+        typeof value === "number" && Number.isFinite(value)
+            ? Math.min(MAX_OCTAVE, Math.max(MIN_OCTAVE, Math.round(value)))
+            : alt;
+    let low = clampOctave(lowOctave, fallback.lowOctave);
+    let high = clampOctave(highOctave, fallback.highOctave);
+    if (low >= high) {
+        if (low >= MAX_OCTAVE) low = MAX_OCTAVE - 1;
+        high = low + 1;
+    }
+    return { lowOctave: low, highOctave: high };
+}
+
+function bottomMidi(range: PitchRange): number {
+    return 12 * (range.lowOctave + 1);
+}
+
+function octaveSpan(range: PitchRange): number {
+    return range.highOctave - range.lowOctave;
+}
 
 export function getScale(id: string): Scale {
     return (
@@ -38,34 +66,35 @@ export function getScale(id: string): Scale {
     );
 }
 
-export function scaleRows(scale: Scale): number {
-    return scale.steps.length * OCTAVES + 1;
+export function scaleRows(scale: Scale, range: PitchRange): number {
+    return scale.steps.length * octaveSpan(range) + 1;
 }
 
-export function rowToMidi(scale: Scale, row: number): number {
-    const rows = scaleRows(scale);
+export function rowToMidi(scale: Scale, range: PitchRange, row: number): number {
+    const rows = scaleRows(scale, range);
     const clamped = Math.max(0, Math.min(rows - 1, Math.round(row)));
     const octave = Math.floor(clamped / scale.steps.length);
     const step = scale.steps[clamped % scale.steps.length];
-    return BOTTOM_MIDI + octave * 12 + step;
+    return bottomMidi(range) + octave * 12 + step;
 }
 
 export function midiToHz(midi: number): number {
     return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-export function rowToHz(scale: Scale, row: number): number {
-    return midiToHz(rowToMidi(scale, row));
+export function rowToHz(scale: Scale, range: PitchRange, row: number): number {
+    return midiToHz(rowToMidi(scale, range, row));
 }
 
 export function yToRow(
     scale: Scale,
+    range: PitchRange,
     y: number,
     top: number,
     height: number
 ): number {
     if (height <= 0) return 0;
-    const rows = scaleRows(scale);
+    const rows = scaleRows(scale, range);
     const fromBottom = 1 - (y - top) / height;
     return Math.max(0, Math.min(rows - 1, Math.floor(fromBottom * rows)));
 }
@@ -85,7 +114,7 @@ const NOTE_NAMES = [
     "B",
 ];
 
-export function rowNoteName(scale: Scale, row: number): string {
-    const midi = rowToMidi(scale, row);
+export function rowNoteName(scale: Scale, range: PitchRange, row: number): string {
+    const midi = rowToMidi(scale, range, row);
     return `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
 }

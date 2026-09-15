@@ -1,10 +1,13 @@
 import { Polyline, Rect, evenPick, monotonicRuns } from "./geometry";
 import { Ink } from "./ink";
 import {
+    DEFAULT_RANGE,
     DEFAULT_SCALE_ID,
+    PitchRange,
     Scale,
     ScaleId,
     getScale,
+    normalizeRange,
     scaleRows,
     yToRow,
 } from "./pitch";
@@ -22,6 +25,7 @@ export type Voice = {
 export type Score = {
     rect: Rect;
     scale: Scale;
+    range: PitchRange;
     pxPerSecond: number;
     durationSec: number;
     columns: number;
@@ -36,6 +40,8 @@ export type ScoreOptions = {
     stepsPerSecond: number;
     maxVoices: number;
     scale: ScaleId;
+    lowOctave: number;
+    highOctave: number;
 };
 
 export const DEFAULT_SCORE_OPTIONS: ScoreOptions = {
@@ -43,6 +49,8 @@ export const DEFAULT_SCORE_OPTIONS: ScoreOptions = {
     stepsPerSecond: 8,
     maxVoices: 5,
     scale: DEFAULT_SCALE_ID,
+    lowOctave: DEFAULT_RANGE.lowOctave,
+    highOctave: DEFAULT_RANGE.highOctave,
 };
 
 export const MIN_PX_PER_SECOND = 40;
@@ -76,9 +84,10 @@ class Grid {
     public constructor(
         private readonly _rect: Rect,
         public readonly columns: number,
-        private readonly _scale: Scale
+        private readonly _scale: Scale,
+        private readonly _range: PitchRange
     ) {
-        this.rows = scaleRows(_scale);
+        this.rows = scaleRows(_scale, _range);
         this.cells = new Array<number>(columns * this.rows).fill(0);
     }
 
@@ -109,7 +118,7 @@ class Grid {
         );
         return {
             column,
-            row: yToRow(this._scale, y, rect.y, rect.height),
+            row: yToRow(this._scale, this._range, y, rect.y, rect.height),
         };
     }
 
@@ -260,11 +269,10 @@ export function buildScore(
     ink: Ink[],
     options: Partial<ScoreOptions> = {}
 ): Score {
-    const { pxPerSecond, stepsPerSecond, maxVoices, scale } = {
-        ...DEFAULT_SCORE_OPTIONS,
-        ...options,
-    };
+    const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave } =
+        { ...DEFAULT_SCORE_OPTIONS, ...options };
     const resolved = getScale(scale);
+    const range = normalizeRange(lowOctave, highOctave);
     const speed = clampSpeed(pxPerSecond);
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
@@ -278,12 +286,13 @@ export function buildScore(
     );
     const stepSec = durationSec / columns;
     const normalized: Rect = { x: rect.x, y: rect.y, width, height };
-    const grid = new Grid(normalized, columns, resolved);
+    const grid = new Grid(normalized, columns, resolved, range);
     const voices = buildVoices(ink, grid, stepSec, maxVoices);
 
     return {
         rect: normalized,
         scale: resolved,
+        range,
         pxPerSecond: speed,
         durationSec,
         columns,
