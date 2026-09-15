@@ -9,6 +9,7 @@ import {
     PanelToDriver,
     openPanel,
     postToPanel,
+    progressionNames,
     scaleOptions,
     serializeScore,
     stylingCssVars,
@@ -19,6 +20,7 @@ import {
     DEFAULT_SETTINGS,
     SereneSettings,
     loadSettings,
+    sanitizeBacking,
     sanitizeKnobs,
     saveSettings,
 } from "./settings";
@@ -100,6 +102,14 @@ export class SereneSession {
     public async postFrames(count?: number): Promise<void> {
         const total = count ?? (await listSereneFrames(this._ctx)).length;
         postToPanel(this._ctx, { type: "frames", count: total });
+    }
+
+    public postBacking(): void {
+        postToPanel(this._ctx, {
+            type: "backing",
+            progressions: progressionNames(this._settings.scale),
+            value: this._settings.backing,
+        });
     }
 
     public postScales(): void {
@@ -205,6 +215,7 @@ export class SereneSession {
                 this.postTheme();
                 this.postSettings();
                 this.postScales();
+                this.postBacking();
                 void this.postFrames();
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
@@ -258,8 +269,26 @@ export class SereneSession {
                 this._rebuild();
                 this._postScore(false, true);
                 return;
-            case "scale":
-                this._updateSettings({ scale: getScale(message.value).id });
+            case "scale": {
+                const scale = getScale(message.value).id;
+                this._updateSettings({
+                    scale,
+                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
+                });
+                this.postBacking();
+                if (!this._rect) return;
+                this._rebuild();
+                this._postScore(false, true);
+                return;
+            }
+            case "backing":
+                this._updateSettings({
+                    backing: sanitizeBacking(
+                        message.value,
+                        this._settings.scale,
+                        this._settings.backing
+                    ),
+                });
                 if (!this._rect) return;
                 this._rebuild();
                 this._postScore(false, true);
@@ -274,6 +303,7 @@ export class SereneSession {
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
+            backing: this._settings.backing.enabled ? this._settings.backing : null,
         });
     }
 

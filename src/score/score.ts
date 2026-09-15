@@ -1,4 +1,5 @@
 import { Polyline, Rect, evenPick, monotonicRuns } from "./geometry";
+import { BackingOptions, backingHits } from "./chords";
 import { Ink } from "./ink";
 import {
     DEFAULT_RANGE,
@@ -12,7 +13,7 @@ import {
     yToRow,
 } from "./pitch";
 
-export type PitchPoint = { t: number; row: number };
+export type PitchPoint = { t: number; row: number; midi?: number };
 
 export type Voice = {
     startSec: number;
@@ -20,6 +21,8 @@ export type Voice = {
     column: number;
     velocity: number;
     glide: boolean;
+    backing: boolean;
+    arp: boolean;
     pitches: PitchPoint[];
 };
 
@@ -43,6 +46,7 @@ export type ScoreOptions = {
     scale: ScaleId;
     lowOctave: number;
     highOctave: number;
+    backing: BackingOptions | null;
 };
 
 export const DEFAULT_SCORE_OPTIONS: ScoreOptions = {
@@ -52,6 +56,7 @@ export const DEFAULT_SCORE_OPTIONS: ScoreOptions = {
     scale: DEFAULT_SCALE_ID,
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
+    backing: null,
 };
 
 export const MIN_PX_PER_SECOND = 40;
@@ -224,6 +229,8 @@ function splitIntoNotes(voice: Voice, stepSec: number): Voice[] {
             column: Math.floor(startSec / stepSec + 1e-6),
             velocity: voice.velocity,
             glide: false,
+            backing: false,
+            arp: false,
             pitches: [{ t: 0, row: pitch.row }],
         };
     });
@@ -260,6 +267,8 @@ function toVoice(
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
         glide,
+        backing: false,
+        arp: false,
         velocity:
             gain *
             (MIN_VELOCITY +
@@ -351,8 +360,15 @@ export function buildScore(
     ink: Ink[],
     options: Partial<ScoreOptions> = {}
 ): Score {
-    const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave } =
-        { ...DEFAULT_SCORE_OPTIONS, ...options };
+    const {
+        pxPerSecond,
+        stepsPerSecond,
+        maxVoices,
+        scale,
+        lowOctave,
+        highOctave,
+        backing,
+    } = { ...DEFAULT_SCORE_OPTIONS, ...options };
     const resolved = getScale(scale);
     const range = normalizeRange(lowOctave, highOctave);
     const speed = clampSpeed(pxPerSecond);
@@ -370,6 +386,21 @@ export function buildScore(
     const normalized: Rect = { x: rect.x, y: rect.y, width, height };
     const grid = new Grid(normalized, columns, resolved, range);
     const voices = buildVoices(ink, grid, stepSec, maxVoices);
+    if (backing) {
+        for (const hit of backingHits(resolved, width, durationSec, backing)) {
+            voices.push({
+                startSec: hit.startSec,
+                durationSec: hit.durationSec,
+                column: Math.floor(hit.startSec / stepSec + 1e-6),
+                velocity: hit.velocity,
+                glide: false,
+                backing: true,
+                arp: hit.arp,
+                pitches: [{ t: 0, row: 0, midi: hit.midi }],
+            });
+        }
+        voices.sort((a, b) => a.startSec - b.startSec);
+    }
 
     return {
         rect: normalized,

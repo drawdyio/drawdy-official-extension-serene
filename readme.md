@@ -100,6 +100,33 @@ The region is rasterized onto a grid of the scale's pitch rows by
 velocities. Voices that start on the same column are
 thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 
+## Backing track
+
+The panel's **Backing** card adds a chord progression under the drawing, played
+by a soft triangle pad (or plucks when a chord is struck more than once). Pick a
+progression for the current scale, a voicing — bass only, bass plus root and
+fifth with the third omitted, or the full triad — and a rhythm, then set its
+level. Rhythm is 1, 2 or 4 strikes per chord (a single sustained chord is held
+for 85% of its slot so chords breathe), or an arpeggio over a sustained bass. **Up** runs 1 3 5 1' 3' 5 3 1 through the
+triad and its octave, **Down** is the mirror image starting from the top, and
+either pattern plays twice per chord in double time. Arpeggio notes are plain
+sines struck with a near-instant attack. The bass sits around C2 and the chord
+tones in the C3 octave regardless of the melodic range.
+
+Progressions are built diatonically from the scale, so chord qualities follow
+the mode: in C major **I vi IV V**, **I iii IV V**, **I V**, **I IV** or **I**;
+in dorian **i III IV**, **i IV** or **i III/6 IV/6** (first inversions whose
+bass walks down from the tonic: C, G below, A); in mixolydian **I v** or
+**I vii**, where the vii bass steps down to the B♭ below the tonic rather than
+up; in lydian **I II V**, **I V** or **I**; the
+pentatonic and hirajoshi scales hold a single **I**.
+
+The backing is locked to the sweep. A frame up to about 1000 px wide plays the
+progression once across its duration; every further 1000 px adds another pass
+(nearest multiple, minimum one), so a 2000 px frame plays it twice and a
+1500 px frame twice at a brisker pace. Because the chords are ordinary voices in
+the score, they follow speed changes, seeks and loops exactly like the ink.
+
 ## Panel
 
 The extension rail opens a transport panel with play/stop, a speed slider

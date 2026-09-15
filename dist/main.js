@@ -32,6 +32,179 @@ async function registerMenus(ctx) {
     }
 }
 
+const ARP_PATTERNS = ["arp-up", "arp-down"];
+function isArp(rhythm) {
+    return typeof rhythm === "string";
+}
+const BASS_OCTAVE_MIDI = 36;
+const CHORD_OCTAVE_MIDI = 48;
+const DESCEND_FROM_SEMITONES = 10;
+const PROGRESSION_SPAN_PX = 1000;
+const BACKING_VELOCITY = 0.85;
+const BASS_VELOCITY = 1;
+const ARP_VELOCITY = 0.8;
+const SUSTAIN_PORTION = 0.85;
+const ARP_STEPS_PER_CHORD = 16;
+const ARP_NOTE_PORTION = 0.9;
+const ARP_SHAPES = {
+    "arp-up": [0, 1, 2, 3, 4, 2, 1, 0],
+    "arp-down": [4, 3, 2, 1, 0, 2, 3, 4],
+};
+function arpIndex(pattern, step, toneCount) {
+    const shape = ARP_SHAPES[pattern];
+    return shape[step % shape.length] % toneCount;
+}
+const ROMAN = {
+    i: 0,
+    ii: 1,
+    iii: 2,
+    iv: 3,
+    v: 4,
+    vi: 5,
+    vii: 6,
+};
+function chord(symbol) {
+    const [numeral, suffix] = symbol.split("/");
+    const degree = ROMAN[numeral.toLowerCase()];
+    return { degree, inversion: suffix === "6" ? 1 : 0 };
+}
+function progression(symbols) {
+    return {
+        name: symbols,
+        chords: symbols.split(" ").map(chord),
+    };
+}
+const PROGRESSIONS = {
+    major: [
+        progression("I vi IV V"),
+        progression("I iii IV V"),
+        progression("I V"),
+        progression("I IV"),
+        progression("I"),
+    ],
+    dorian: [
+        progression("i III IV"),
+        progression("i IV"),
+        progression("i III/6 IV/6"),
+    ],
+    mixolydian: [progression("I v"), progression("I vii")],
+    lydian: [progression("I II V"), progression("I V"), progression("I")],
+    "major-pentatonic": [progression("I")],
+    japanese: [progression("I")],
+};
+function progressionsFor(scaleId) {
+    return PROGRESSIONS[scaleId];
+}
+function pickProgression(scaleId, index) {
+    const list = progressionsFor(scaleId);
+    const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
+    return list[clamped];
+}
+function triadSemitones(scale, degree) {
+    const steps = scale.steps;
+    if (steps.length !== 7) {
+        const third = steps.includes(4) ? 4 : 3;
+        return [0, third, 7];
+    }
+    const root = steps[degree % 7];
+    const at = (offset) => {
+        const index = (degree + offset) % 7;
+        const wrapped = Math.floor((degree + offset) / 7) * 12;
+        return steps[index] + wrapped - root;
+    };
+    return [0, at(2), at(4)];
+}
+function nearestOctave(pitchClass, reference) {
+    const below = reference - ((((reference - pitchClass) % 12) + 12) % 12);
+    const above = below + 12;
+    return reference - below <= above - reference ? below : above;
+}
+function chordTones(scale, spec, previousBass) {
+    const root = scale.steps.length === 7 ? scale.steps[spec.degree % 7] : 0;
+    const [, third, fifth] = triadSemitones(scale, spec.degree);
+    const order = spec.inversion === 1 ? [third, fifth, 12] : [0, third, fifth];
+    const bassInterval = spec.inversion === 1 ? third : 0;
+    const octaveShift = root >= DESCEND_FROM_SEMITONES ? -12 : 0;
+    const bassClass = (root + bassInterval) % 12;
+    const bass = spec.inversion === 1 && previousBass !== undefined
+        ? nearestOctave(bassClass, previousBass)
+        : BASS_OCTAVE_MIDI + bassClass + octaveShift;
+    const upper = order.map((interval) => CHORD_OCTAVE_MIDI + root + interval + octaveShift);
+    return { bass, upper };
+}
+function voiceTones(tones, voicing, inversion) {
+    if (voicing === "bass")
+        return [tones.bass];
+    if (voicing === "omit3") {
+        const withoutThird = inversion === 1
+            ? [tones.upper[1], tones.upper[2]]
+            : [tones.upper[0], tones.upper[2]];
+        return [tones.bass, ...withoutThird];
+    }
+    return [tones.bass, ...tones.upper];
+}
+function progressionCount(frameWidth) {
+    return Math.max(1, Math.round(frameWidth / PROGRESSION_SPAN_PX));
+}
+function backingHits(scale, frameWidth, durationSec, options) {
+    const prog = pickProgression(scale.id, options.progression);
+    const count = progressionCount(frameWidth);
+    const progressionSec = durationSec / count;
+    const chordSec = progressionSec / prog.chords.length;
+    const hits = [];
+    for (let pass = 0; pass < count; pass++) {
+        let previousBass;
+        prog.chords.forEach((spec, chordIndex) => {
+            const chord = chordTones(scale, spec, previousBass);
+            previousBass = chord.bass;
+            const chordStart = pass * progressionSec + chordIndex * chordSec;
+            if (isArp(options.rhythm)) {
+                hits.push({
+                    startSec: chordStart,
+                    durationSec: chordSec * SUSTAIN_PORTION,
+                    midi: chord.bass,
+                    velocity: BASS_VELOCITY,
+                    arp: false,
+                });
+                const arpTones = [
+                    ...chord.upper,
+                    chord.upper[0] + 12,
+                    chord.upper[1] + 12,
+                ];
+                const stepSec = chordSec / ARP_STEPS_PER_CHORD;
+                for (let step = 0; step < ARP_STEPS_PER_CHORD; step++) {
+                    const index = arpIndex(options.rhythm, step, arpTones.length);
+                    hits.push({
+                        startSec: chordStart + step * stepSec,
+                        durationSec: stepSec * ARP_NOTE_PORTION,
+                        midi: arpTones[index],
+                        velocity: ARP_VELOCITY,
+                        arp: true,
+                    });
+                }
+                return;
+            }
+            const strikes = options.rhythm;
+            const hitSec = chordSec / strikes;
+            const holdSec = strikes === 1 ? hitSec * SUSTAIN_PORTION : hitSec;
+            const tones = voiceTones(chord, options.voicing, spec.inversion);
+            for (let hit = 0; hit < strikes; hit++) {
+                const startSec = chordStart + hit * hitSec;
+                tones.forEach((midi, toneIndex) => {
+                    hits.push({
+                        startSec,
+                        durationSec: holdSec,
+                        midi,
+                        velocity: toneIndex === 0 ? BASS_VELOCITY : BACKING_VELOCITY,
+                        arp: false,
+                    });
+                });
+            }
+        });
+    }
+    return hits;
+}
+
 const SCALES = [
     {
         id: "major-pentatonic",
@@ -401,6 +574,16 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
 .add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
 .add-frame:disabled { opacity: 0.5; cursor: default; }
+.level {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    margin: 0;
+    accent-color: var(--drawdy-primary, #6366f1);
+    cursor: pointer;
+}
+.card.backing-off .backing-only { display: none; }
+.card.arp-mode .voicing-row { display: none; }
 .status {
     font-size: 11px;
     line-height: 1.6;
@@ -453,6 +636,36 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 
     <section class="card">
         <div class="row">
+            <label for="backing-prog">Backing</label>
+            <select id="backing-prog" aria-label="Chord progression"></select>
+        </div>
+        <div class="row backing-only voicing-row">
+            <label for="backing-voicing">Voicing</label>
+            <select id="backing-voicing">
+                <option value="bass">Bass only</option>
+                <option value="omit3">Omit 3rd</option>
+                <option value="full">Full chord</option>
+            </select>
+        </div>
+        <div class="row backing-only">
+            <label for="backing-rhythm">Rhythm</label>
+            <select id="backing-rhythm">
+                <option value="1">1 per chord</option>
+                <option value="2">2 per chord</option>
+                <option value="4">4 per chord</option>
+                <option value="arp-up">Arpeggio up</option>
+                <option value="arp-down">Arpeggio down</option>
+            </select>
+        </div>
+        <div class="row backing-only">
+            <label for="backing-level">Level</label>
+            <input id="backing-level" class="level" type="range" min="0" max="1" step="0.01" value="0.5" />
+            <span class="val" id="backing-level-val">50%</span>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="row">
             <label for="add-frame">Frames</label>
             <button id="add-frame" type="button" class="add-frame">Add a Serene frame</button>
             <span class="val" id="frame-count">0</span>
@@ -496,6 +709,13 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         rangeChip.textContent = "C" + low + "\u2013C" + high;
     }
     var rack = document.getElementById("rack");
+    var backingProg = document.getElementById("backing-prog");
+    var backingVoicing = document.getElementById("backing-voicing");
+    var backingRhythm = document.getElementById("backing-rhythm");
+    var backingLevel = document.getElementById("backing-level");
+    var backingLevelVal = document.getElementById("backing-level-val");
+    var backingCard = backingProg.closest(".card");
+    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1, volume: 0.5 };
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
 
@@ -713,6 +933,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PERCUSSIVE_TAU = 0.32;
+    var BACKING_GAIN = 0.55;
+    var BACKING_SUSTAIN = 0.7;
+    var BACKING_PAD_ATTACK = 0.09;
+    var BACKING_PLUCK_ATTACK = 0.006;
+    var BACKING_PAD_MIN_SEC = 1.2;
+    var BACKING_CUTOFF = 1100;
+    var ARP_GAIN = 0.7;
+    var ARP_SUSTAIN = 0.4;
+    var ARP_ATTACK = 0.003;
     var GLIDE_PORTION = 0.35;
     var MAX_GLIDE = 0.3;
     var PEAK_GAIN = 0.2;
@@ -856,9 +1085,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     }
 
     function voiceKey(note, px) {
-        var parts = [Math.round(note.t * px), Math.round((note.t + note.d) * px)];
+        var parts = [note.b ? "b" : "i", Math.round(note.t * px), Math.round((note.t + note.d) * px)];
         for (var i = 0; i < note.pitches.length; i++) {
-            parts.push(note.pitches[i].row + "@" + Math.round(note.pitches[i].t * px));
+            parts.push(Math.round(note.pitches[i].hz) + "@" + Math.round(note.pitches[i].t * px));
         }
         return parts.join("|");
     }
@@ -900,13 +1129,28 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        var sustain = Math.max(0.0004, peak * SUSTAIN_RATIO);
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * backing.volume;
+        var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
+        var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
-        var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
+        var attack = note.a
+            ? ARP_ATTACK
+            : note.b
+              ? (note.d >= BACKING_PAD_MIN_SEC ? BACKING_PAD_ATTACK : BACKING_PLUCK_ATTACK)
+              : Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
-        osc.type = "sine";
+        osc.type = note.b && !note.a ? "triangle" : "sine";
         schedulePitches(osc, at, note.pitches, undefined, note.g);
         var gain = ctx.createGain();
+        var source = osc;
+        if (note.b && !note.a) {
+            var cutoff = ctx.createBiquadFilter();
+            cutoff.type = "lowpass";
+            cutoff.frequency.value = BACKING_CUTOFF;
+            cutoff.Q.value = 0.6;
+            osc.connect(cutoff);
+            source = cutoff;
+        }
         var stopAt;
         if (at >= now) {
             stopAt = scheduleEnvelope(gain, at, peak, sustain, attack, end);
@@ -915,7 +1159,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             releaseAt(gain, end);
             stopAt = end + RELEASE * 3;
         }
-        osc.connect(gain);
+        source.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
@@ -1214,6 +1458,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         api.postMessage({ type: "progress", t: target });
     }
 
+    function inkVoiceCount() {
+        var count = 0;
+        for (var i = 0; i < score.voices.length; i++) if (!score.voices[i].b) count++;
+        return count;
+    }
+
     function describe() {
         if (!score) return;
         syncPulse();
@@ -1230,8 +1480,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
         setStatus(
             "<b>" +
-                score.voices.length +
-                "</b> legato voices from <b>" +
+                inkVoiceCount() +
+                "</b> voices from <b>" +
                 score.elementCount +
                 "</b> elements<br />" +
                 score.scaleName +
@@ -1243,6 +1493,52 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             false
         );
     }
+
+    function showBacking(progressions, value) {
+        backing = value;
+        backingProg.textContent = "";
+        var off = document.createElement("option");
+        off.value = "off";
+        off.textContent = "Off";
+        backingProg.appendChild(off);
+        progressions.forEach(function (name, index) {
+            var option = document.createElement("option");
+            option.value = String(index);
+            option.textContent = name;
+            backingProg.appendChild(option);
+        });
+        backingProg.value = value.enabled ? String(value.progression) : "off";
+        backingVoicing.value = value.voicing;
+        backingRhythm.value = String(value.rhythm);
+        backingCard.classList.toggle("arp-mode", typeof value.rhythm === "string");
+        backingLevel.value = String(value.volume);
+        backingLevelVal.textContent = Math.round(value.volume * 100) + "%";
+        backingCard.classList.toggle("backing-off", !value.enabled);
+    }
+
+    function postBacking() {
+        var choice = backingProg.value;
+        backing = {
+            enabled: choice !== "off",
+            progression: choice === "off" ? backing.progression : Number(choice),
+            voicing: backingVoicing.value,
+            rhythm: isNaN(Number(backingRhythm.value)) ? backingRhythm.value : Number(backingRhythm.value),
+            volume: Number(backingLevel.value),
+        };
+        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
+        backingCard.classList.toggle("backing-off", !backing.enabled);
+        backingCard.classList.toggle("arp-mode", typeof backing.rhythm === "string");
+        api.postMessage({ type: "backing", value: backing });
+    }
+
+    backingProg.addEventListener("change", postBacking);
+    backingVoicing.addEventListener("change", postBacking);
+    backingRhythm.addEventListener("change", postBacking);
+    backingLevel.addEventListener("input", function () {
+        backing.volume = Number(backingLevel.value);
+        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
+    });
+    backingLevel.addEventListener("change", postBacking);
 
     function setFrames(count) {
         frameCountEl.textContent = String(count);
@@ -1354,6 +1650,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             seekTo(msg.t);
             return;
         }
+        if (msg.type === "backing") {
+            showBacking(msg.progressions, msg.value);
+            return;
+        }
         if (msg.type === "scales") {
             scaleSelect.textContent = "";
             msg.scales.forEach(function (scale) {
@@ -1406,9 +1706,13 @@ const serializeVoice = (score) => (voice) => ({
     d: voice.durationSec,
     v: voice.velocity,
     g: voice.glide,
+    b: voice.backing,
+    a: voice.arp,
     pitches: voice.pitches.map((pitch) => ({
         t: pitch.t,
-        hz: rowToHz(score.scale, score.range, pitch.row),
+        hz: pitch.midi !== undefined
+            ? midiToHz(pitch.midi)
+            : rowToHz(score.scale, score.range, pitch.row),
         row: pitch.row,
     })),
 });
@@ -1437,6 +1741,7 @@ async function openPanel(ctx, styling) {
         },
     });
 }
+const progressionNames = (scaleId) => progressionsFor(scaleId).map((progression) => progression.name);
 const scaleOptions = () => SCALES.map((scale) => ({ id: scale.id, name: scale.name }));
 function postToPanel(ctx, message) {
     void ctx.issueCommand({
@@ -1781,6 +2086,7 @@ const DEFAULT_SCORE_OPTIONS = {
     scale: DEFAULT_SCALE_ID,
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
+    backing: null,
 };
 const MIN_PX_PER_SECOND = 40;
 const MAX_PX_PER_SECOND = 900;
@@ -1915,6 +2221,8 @@ function splitIntoNotes(voice, stepSec) {
             column: Math.floor(startSec / stepSec + 1e-6),
             velocity: voice.velocity,
             glide: false,
+            backing: false,
+            arp: false,
             pitches: [{ t: 0, row: pitch.row }],
         };
     });
@@ -1945,6 +2253,8 @@ function toVoice(groups, grid, stepSec, gain, glide) {
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
         glide,
+        backing: false,
+        arp: false,
         velocity: gain *
             (MIN_VELOCITY +
                 (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS)),
@@ -2006,7 +2316,7 @@ function buildVoices(ink, grid, stepSec, maxVoices) {
     return kept;
 }
 function buildScore(rect, ink, options = {}) {
-    const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave } = { ...DEFAULT_SCORE_OPTIONS, ...options };
+    const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave, backing, } = { ...DEFAULT_SCORE_OPTIONS, ...options };
     const resolved = getScale(scale);
     const range = normalizeRange(lowOctave, highOctave);
     const speed = clampSpeed(pxPerSecond);
@@ -2018,6 +2328,21 @@ function buildScore(rect, ink, options = {}) {
     const normalized = { x: rect.x, y: rect.y, width, height };
     const grid = new Grid(normalized, columns, resolved, range);
     const voices = buildVoices(ink, grid, stepSec, maxVoices);
+    if (backing) {
+        for (const hit of backingHits(resolved, width, durationSec, backing)) {
+            voices.push({
+                startSec: hit.startSec,
+                durationSec: hit.durationSec,
+                column: Math.floor(hit.startSec / stepSec + 1e-6),
+                velocity: hit.velocity,
+                glide: false,
+                backing: true,
+                arp: hit.arp,
+                pitches: [{ t: 0, row: 0, midi: hit.midi }],
+            });
+        }
+        voices.sort((a, b) => a.startSec - b.startSec);
+    }
     return {
         rect: normalized,
         scale: resolved,
@@ -2308,6 +2633,13 @@ async function resolveTarget(ctx, pointer, explicit = []) {
 }
 
 const SETTINGS_KEY = "settings";
+const DEFAULT_BACKING = {
+    enabled: false,
+    progression: 0,
+    voicing: "full",
+    rhythm: 1,
+    volume: 0.5,
+};
 const DEFAULT_SETTINGS = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
     scale: DEFAULT_SCALE_ID,
@@ -2317,7 +2649,32 @@ const DEFAULT_SETTINGS = {
     attack: 0.02,
     volume: 0.7,
     reverb: 0.38,
+    backing: DEFAULT_BACKING,
 };
+const VOICINGS = ["bass", "omit3", "full"];
+const RHYTHMS = [1, 2, 4, ...ARP_PATTERNS];
+function sanitizeBacking(raw, scale, current = DEFAULT_BACKING) {
+    if (typeof raw !== "object" || raw === null)
+        return current;
+    const record = raw;
+    const count = progressionsFor(scale).length;
+    const progression = typeof record.progression === "number" && Number.isFinite(record.progression)
+        ? Math.min(count - 1, Math.max(0, Math.floor(record.progression)))
+        : Math.min(count - 1, current.progression);
+    const voicing = VOICINGS.includes(record.voicing)
+        ? record.voicing
+        : current.voicing;
+    const rhythm = RHYTHMS.includes(record.rhythm)
+        ? record.rhythm
+        : current.rhythm;
+    return {
+        enabled: typeof record.enabled === "boolean" ? record.enabled : current.enabled,
+        progression,
+        voicing,
+        rhythm,
+        volume: clampNumber(record.volume, 0, 1, current.volume),
+    };
+}
 const KNOB_RANGES = {
     attack: [0, 0.3],
     volume: [0, 1],
@@ -2347,6 +2704,7 @@ function sanitizeSettings(raw) {
         scale,
         loop: raw.loop === true,
         ...normalizeRange(raw.lowOctave, raw.highOctave),
+        backing: sanitizeBacking(raw.backing, scale),
     };
 }
 async function loadSettings(ctx) {
@@ -2444,6 +2802,13 @@ class SereneSession {
     async postFrames(count) {
         const total = count ?? (await listSereneFrames(this._ctx)).length;
         postToPanel(this._ctx, { type: "frames", count: total });
+    }
+    postBacking() {
+        postToPanel(this._ctx, {
+            type: "backing",
+            progressions: progressionNames(this._settings.scale),
+            value: this._settings.backing,
+        });
     }
     postScales() {
         postToPanel(this._ctx, {
@@ -2546,6 +2911,7 @@ class SereneSession {
                 this.postTheme();
                 this.postSettings();
                 this.postScales();
+                this.postBacking();
                 void this.postFrames();
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
@@ -2598,8 +2964,23 @@ class SereneSession {
                 this._rebuild();
                 this._postScore(false, true);
                 return;
-            case "scale":
-                this._updateSettings({ scale: getScale(message.value).id });
+            case "scale": {
+                const scale = getScale(message.value).id;
+                this._updateSettings({
+                    scale,
+                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
+                });
+                this.postBacking();
+                if (!this._rect)
+                    return;
+                this._rebuild();
+                this._postScore(false, true);
+                return;
+            }
+            case "backing":
+                this._updateSettings({
+                    backing: sanitizeBacking(message.value, this._settings.scale, this._settings.backing),
+                });
                 if (!this._rect)
                     return;
                 this._rebuild();
@@ -2615,6 +2996,7 @@ class SereneSession {
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
+            backing: this._settings.backing.enabled ? this._settings.backing : null,
         });
     }
     _postScore(autoplay, live = false) {

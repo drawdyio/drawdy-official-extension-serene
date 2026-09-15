@@ -5,6 +5,13 @@ import {
     getScale,
     normalizeRange,
 } from "../score/pitch";
+import {
+    ARP_PATTERNS,
+    BackingOptions,
+    Rhythm,
+    Voicing,
+    progressionsFor,
+} from "../score/chords";
 import { DEFAULT_SCORE_OPTIONS, clampSpeed } from "../score/score";
 import { Ctx, stamp } from "./context";
 
@@ -16,12 +23,26 @@ export type KnobSettings = {
     reverb: number;
 };
 
+export type BackingSettings = BackingOptions & {
+    enabled: boolean;
+    volume: number;
+};
+
 export type SereneSettings = KnobSettings & {
     speed: number;
     scale: ScaleId;
     loop: boolean;
     lowOctave: number;
     highOctave: number;
+    backing: BackingSettings;
+};
+
+export const DEFAULT_BACKING: BackingSettings = {
+    enabled: false,
+    progression: 0,
+    voicing: "full",
+    rhythm: 1,
+    volume: 0.5,
 };
 
 export const DEFAULT_SETTINGS: SereneSettings = {
@@ -33,7 +54,38 @@ export const DEFAULT_SETTINGS: SereneSettings = {
     attack: 0.02,
     volume: 0.7,
     reverb: 0.38,
+    backing: DEFAULT_BACKING,
 };
+
+const VOICINGS: Voicing[] = ["bass", "omit3", "full"];
+const RHYTHMS: Rhythm[] = [1, 2, 4, ...ARP_PATTERNS];
+
+export function sanitizeBacking(
+    raw: unknown,
+    scale: ScaleId,
+    current: BackingSettings = DEFAULT_BACKING
+): BackingSettings {
+    if (typeof raw !== "object" || raw === null) return current;
+    const record = raw as Record<string, unknown>;
+    const count = progressionsFor(scale).length;
+    const progression =
+        typeof record.progression === "number" && Number.isFinite(record.progression)
+            ? Math.min(count - 1, Math.max(0, Math.floor(record.progression)))
+            : Math.min(count - 1, current.progression);
+    const voicing = VOICINGS.includes(record.voicing as Voicing)
+        ? (record.voicing as Voicing)
+        : current.voicing;
+    const rhythm = RHYTHMS.includes(record.rhythm as Rhythm)
+        ? (record.rhythm as Rhythm)
+        : current.rhythm;
+    return {
+        enabled: typeof record.enabled === "boolean" ? record.enabled : current.enabled,
+        progression,
+        voicing,
+        rhythm,
+        volume: clampNumber(record.volume, 0, 1, current.volume),
+    };
+}
 
 const KNOB_RANGES: Record<keyof KnobSettings, [number, number]> = {
     attack: [0, 0.3],
@@ -70,6 +122,7 @@ export function sanitizeSettings(raw: Record<string, unknown>): SereneSettings {
         scale,
         loop: raw.loop === true,
         ...normalizeRange(raw.lowOctave, raw.highOctave),
+        backing: sanitizeBacking(raw.backing, scale),
     };
 }
 

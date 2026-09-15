@@ -304,6 +304,16 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
 .add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
 .add-frame:disabled { opacity: 0.5; cursor: default; }
+.level {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    margin: 0;
+    accent-color: var(--drawdy-primary, #6366f1);
+    cursor: pointer;
+}
+.card.backing-off .backing-only { display: none; }
+.card.arp-mode .voicing-row { display: none; }
 .status {
     font-size: 11px;
     line-height: 1.6;
@@ -356,6 +366,36 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 
     <section class="card">
         <div class="row">
+            <label for="backing-prog">Backing</label>
+            <select id="backing-prog" aria-label="Chord progression"></select>
+        </div>
+        <div class="row backing-only voicing-row">
+            <label for="backing-voicing">Voicing</label>
+            <select id="backing-voicing">
+                <option value="bass">Bass only</option>
+                <option value="omit3">Omit 3rd</option>
+                <option value="full">Full chord</option>
+            </select>
+        </div>
+        <div class="row backing-only">
+            <label for="backing-rhythm">Rhythm</label>
+            <select id="backing-rhythm">
+                <option value="1">1 per chord</option>
+                <option value="2">2 per chord</option>
+                <option value="4">4 per chord</option>
+                <option value="arp-up">Arpeggio up</option>
+                <option value="arp-down">Arpeggio down</option>
+            </select>
+        </div>
+        <div class="row backing-only">
+            <label for="backing-level">Level</label>
+            <input id="backing-level" class="level" type="range" min="0" max="1" step="0.01" value="0.5" />
+            <span class="val" id="backing-level-val">50%</span>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="row">
             <label for="add-frame">Frames</label>
             <button id="add-frame" type="button" class="add-frame">Add a Serene frame</button>
             <span class="val" id="frame-count">0</span>
@@ -399,6 +439,13 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         rangeChip.textContent = "C" + low + "\u2013C" + high;
     }
     var rack = document.getElementById("rack");
+    var backingProg = document.getElementById("backing-prog");
+    var backingVoicing = document.getElementById("backing-voicing");
+    var backingRhythm = document.getElementById("backing-rhythm");
+    var backingLevel = document.getElementById("backing-level");
+    var backingLevelVal = document.getElementById("backing-level-val");
+    var backingCard = backingProg.closest(".card");
+    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1, volume: 0.5 };
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
 
@@ -616,6 +663,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PERCUSSIVE_TAU = 0.32;
+    var BACKING_GAIN = 0.55;
+    var BACKING_SUSTAIN = 0.7;
+    var BACKING_PAD_ATTACK = 0.09;
+    var BACKING_PLUCK_ATTACK = 0.006;
+    var BACKING_PAD_MIN_SEC = 1.2;
+    var BACKING_CUTOFF = 1100;
+    var ARP_GAIN = 0.7;
+    var ARP_SUSTAIN = 0.4;
+    var ARP_ATTACK = 0.003;
     var GLIDE_PORTION = 0.35;
     var MAX_GLIDE = 0.3;
     var PEAK_GAIN = 0.2;
@@ -759,9 +815,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     }
 
     function voiceKey(note, px) {
-        var parts = [Math.round(note.t * px), Math.round((note.t + note.d) * px)];
+        var parts = [note.b ? "b" : "i", Math.round(note.t * px), Math.round((note.t + note.d) * px)];
         for (var i = 0; i < note.pitches.length; i++) {
-            parts.push(note.pitches[i].row + "@" + Math.round(note.pitches[i].t * px));
+            parts.push(Math.round(note.pitches[i].hz) + "@" + Math.round(note.pitches[i].t * px));
         }
         return parts.join("|");
     }
@@ -803,13 +859,28 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        var sustain = Math.max(0.0004, peak * SUSTAIN_RATIO);
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * backing.volume;
+        var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
+        var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
-        var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
+        var attack = note.a
+            ? ARP_ATTACK
+            : note.b
+              ? (note.d >= BACKING_PAD_MIN_SEC ? BACKING_PAD_ATTACK : BACKING_PLUCK_ATTACK)
+              : Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
-        osc.type = "sine";
+        osc.type = note.b && !note.a ? "triangle" : "sine";
         schedulePitches(osc, at, note.pitches, undefined, note.g);
         var gain = ctx.createGain();
+        var source = osc;
+        if (note.b && !note.a) {
+            var cutoff = ctx.createBiquadFilter();
+            cutoff.type = "lowpass";
+            cutoff.frequency.value = BACKING_CUTOFF;
+            cutoff.Q.value = 0.6;
+            osc.connect(cutoff);
+            source = cutoff;
+        }
         var stopAt;
         if (at >= now) {
             stopAt = scheduleEnvelope(gain, at, peak, sustain, attack, end);
@@ -818,7 +889,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             releaseAt(gain, end);
             stopAt = end + RELEASE * 3;
         }
-        osc.connect(gain);
+        source.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
@@ -1117,6 +1188,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         api.postMessage({ type: "progress", t: target });
     }
 
+    function inkVoiceCount() {
+        var count = 0;
+        for (var i = 0; i < score.voices.length; i++) if (!score.voices[i].b) count++;
+        return count;
+    }
+
     function describe() {
         if (!score) return;
         syncPulse();
@@ -1133,8 +1210,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
         setStatus(
             "<b>" +
-                score.voices.length +
-                "</b> legato voices from <b>" +
+                inkVoiceCount() +
+                "</b> voices from <b>" +
                 score.elementCount +
                 "</b> elements<br />" +
                 score.scaleName +
@@ -1146,6 +1223,52 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             false
         );
     }
+
+    function showBacking(progressions, value) {
+        backing = value;
+        backingProg.textContent = "";
+        var off = document.createElement("option");
+        off.value = "off";
+        off.textContent = "Off";
+        backingProg.appendChild(off);
+        progressions.forEach(function (name, index) {
+            var option = document.createElement("option");
+            option.value = String(index);
+            option.textContent = name;
+            backingProg.appendChild(option);
+        });
+        backingProg.value = value.enabled ? String(value.progression) : "off";
+        backingVoicing.value = value.voicing;
+        backingRhythm.value = String(value.rhythm);
+        backingCard.classList.toggle("arp-mode", typeof value.rhythm === "string");
+        backingLevel.value = String(value.volume);
+        backingLevelVal.textContent = Math.round(value.volume * 100) + "%";
+        backingCard.classList.toggle("backing-off", !value.enabled);
+    }
+
+    function postBacking() {
+        var choice = backingProg.value;
+        backing = {
+            enabled: choice !== "off",
+            progression: choice === "off" ? backing.progression : Number(choice),
+            voicing: backingVoicing.value,
+            rhythm: isNaN(Number(backingRhythm.value)) ? backingRhythm.value : Number(backingRhythm.value),
+            volume: Number(backingLevel.value),
+        };
+        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
+        backingCard.classList.toggle("backing-off", !backing.enabled);
+        backingCard.classList.toggle("arp-mode", typeof backing.rhythm === "string");
+        api.postMessage({ type: "backing", value: backing });
+    }
+
+    backingProg.addEventListener("change", postBacking);
+    backingVoicing.addEventListener("change", postBacking);
+    backingRhythm.addEventListener("change", postBacking);
+    backingLevel.addEventListener("input", function () {
+        backing.volume = Number(backingLevel.value);
+        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
+    });
+    backingLevel.addEventListener("change", postBacking);
 
     function setFrames(count) {
         frameCountEl.textContent = String(count);
@@ -1255,6 +1378,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
         if (msg.type === "seek") {
             seekTo(msg.t);
+            return;
+        }
+        if (msg.type === "backing") {
+            showBacking(msg.progressions, msg.value);
             return;
         }
         if (msg.type === "scales") {
