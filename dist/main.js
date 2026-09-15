@@ -80,6 +80,16 @@ function isArp(rhythm) {
 }
 const BASS_OCTAVE_MIDI = 36;
 const CHORD_OCTAVE_MIDI = 48;
+// Voice-led upper voices are nudged back when they wander past this window.
+const UPPER_LOW_MIDI = CHORD_OCTAVE_MIDI - 8; // E3
+const UPPER_HIGH_MIDI = CHORD_OCTAVE_MIDI + 19; // G5
+const OUT_OF_RANGE_PENALTY = 6;
+// Gentle gravity toward each voice's opening register. Without it, a loop
+// like I vi IV V climbs an inversion every pass until it hits the window.
+const HOME_PULL = 0.6;
+// Open voicing: the upper voices should span more than an octave. Collapsing
+// into close position costs this much extra movement.
+const CLOSED_PENALTY = 4;
 const DESCEND_FROM_SEMITONES = 10;
 const PROGRESSION_SPAN_PX = 1000;
 const BACKING_VELOCITY = 0.85;
@@ -171,27 +181,83 @@ function nearestOctave(pitchClass, reference) {
     const above = below + 12;
     return reference - below <= above - reference ? below : above;
 }
-function chordTones(scale, spec, previousBass) {
+function permutations(items) {
+    if (items.length <= 1)
+        return [items];
+    const out = [];
+    items.forEach((item, index) => {
+        const rest = [...items.slice(0, index), ...items.slice(index + 1)];
+        for (const tail of permutations(rest))
+            out.push([item, ...tail]);
+    });
+    return out;
+}
+/**
+ * Four-part-harmony style voice leading: each previous voice moves to the
+ * nearest octave of one chord tone so that every tone is covered and the
+ * total movement is as small as possible (C E G -> B E G rather than E G B).
+ */
+function leadVoices(previous, pitchClasses, home = previous) {
+    let best = [];
+    let bestCost = Infinity;
+    for (const assignment of permutations(pitchClasses)) {
+        const next = assignment.map((pitchClass, index) => nearestOctave(pitchClass, previous[index]));
+        let total = 0;
+        let widest = 0;
+        next.forEach((midi, index) => {
+            const move = Math.abs(midi - previous[index]);
+            total += move + HOME_PULL * Math.abs(midi - home[index]);
+            widest = Math.max(widest, move);
+            if (midi < UPPER_LOW_MIDI || midi > UPPER_HIGH_MIDI) {
+                total += OUT_OF_RANGE_PENALTY;
+            }
+        });
+        const span = Math.max(...next) - Math.min(...next);
+        if (span < 12)
+            total += CLOSED_PENALTY;
+        const cost = total + widest / 100;
+        if (cost < bestCost) {
+            bestCost = cost;
+            best = next;
+        }
+    }
+    return best;
+}
+/**
+ * With `lead` on, the upper voices move smoothly from `previous`; off, they
+ * are always spelled in plain root-position (or first-inversion) order, which
+ * arpeggios rely on for their 1 3 5 1' 3' shape.
+ */
+function chordTones(scale, spec, previous, lead = true) {
     const root = scale.steps.length === 7 ? scale.steps[spec.degree % 7] : 0;
     const [, third, fifth] = triadSemitones(scale, spec.degree);
-    const order = spec.inversion === 1 ? [third, fifth, 12] : [0, third, fifth];
     const bassInterval = spec.inversion === 1 ? third : 0;
     const octaveShift = root >= DESCEND_FROM_SEMITONES ? -12 : 0;
     const bassClass = (root + bassInterval) % 12;
-    const bass = spec.inversion === 1 && previousBass !== undefined
-        ? nearestOctave(bassClass, previousBass)
+    const thirdClass = (root + third) % 12;
+    const bass = previous && spec.inversion === 1
+        ? nearestOctave(bassClass, previous.bass)
         : BASS_OCTAVE_MIDI + bassClass + octaveShift;
-    const upper = order.map((interval) => CHORD_OCTAVE_MIDI + root + interval + octaveShift);
-    return { bass, upper };
+    // Arpeggios want close spelling in 1 3 5 order; led chords open with
+    // the third on top an octave up (C3 G3 E4) and stay open from there.
+    const order = !lead
+        ? spec.inversion === 1
+            ? [third, fifth, 12]
+            : [0, third, fifth]
+        : [0, fifth, third + 12];
+    const upper = previous && lead
+        ? leadVoices(previous.upper, [root % 12, thirdClass, (root + fifth) % 12], previous.home)
+        : order.map((interval) => CHORD_OCTAVE_MIDI + root + interval + octaveShift);
+    return { bass, upper, home: previous ? previous.home : upper, thirdClass };
 }
-function voiceTones(tones, voicing, inversion) {
+function voiceTones(tones, voicing) {
     if (voicing === "bass")
         return [tones.bass];
     if (voicing === "omit3") {
-        const withoutThird = inversion === 1
-            ? [tones.upper[1], tones.upper[2]]
-            : [tones.upper[0], tones.upper[2]];
-        return [tones.bass, ...withoutThird];
+        return [
+            tones.bass,
+            ...tones.upper.filter((midi) => midi % 12 !== tones.thirdClass),
+        ];
     }
     return [tones.bass, ...tones.upper];
 }
@@ -205,11 +271,15 @@ function backingHits(scale, frameWidth, durationSec, options) {
     const progressionSec = durationSec / count;
     const chordSec = progressionSec / prog.chords.length;
     const hits = [];
+    const arp = isArp(options.rhythm);
+    // Sustained chords are voice-led continuously across repeated passes so
+    // the return to the first chord is as smooth as every other change.
+    // Arpeggios keep plain root-position spelling.
+    let previous;
     for (let pass = 0; pass < count; pass++) {
-        let previousBass;
         prog.chords.forEach((spec, chordIndex) => {
-            const chord = chordTones(harmony, spec, previousBass);
-            previousBass = chord.bass;
+            const chord = chordTones(harmony, spec, previous, !arp);
+            previous = chord;
             const chordStart = pass * progressionSec + chordIndex * chordSec;
             if (isArp(options.rhythm)) {
                 hits.push({
@@ -240,7 +310,7 @@ function backingHits(scale, frameWidth, durationSec, options) {
             const strikes = options.rhythm;
             const hitSec = chordSec / strikes;
             const holdSec = strikes === 1 ? hitSec * SUSTAIN_PORTION : hitSec;
-            const tones = voiceTones(chord, options.voicing, spec.inversion);
+            const tones = voiceTones(chord, options.voicing);
             for (let hit = 0; hit < strikes; hit++) {
                 const startSec = chordStart + hit * hitSec;
                 tones.forEach((midi, toneIndex) => {
