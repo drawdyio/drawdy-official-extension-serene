@@ -181,6 +181,7 @@ export class SereneSession {
         const rect = this._rect;
         if (this._playing && rect && previous && !sameRect(rect, previous)) {
             await this._playhead.show(rect);
+            this._transport.setPlaying(rect);
         }
         this._postScore(false, true);
     }
