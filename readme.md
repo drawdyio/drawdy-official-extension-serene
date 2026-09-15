@@ -105,8 +105,8 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 The panel's **Backing** card adds a chord progression under the drawing, played
 by a soft triangle pad (or plucks when a chord is struck more than once). Pick a
 progression for the current scale, a voicing — bass only, bass plus root and
-fifth with the third omitted, or the full triad — and a rhythm, then set its
-level. Rhythm is 1, 2 or 4 strikes per chord (a single sustained chord is held
+fifth with the third omitted, or the full triad — and a rhythm. Balance it
+against the drawing with the **Notes** and **Backing** knobs in the rack. Rhythm is 1, 2 or 4 strikes per chord (a single sustained chord is held
 for 85% of its slot so chords breathe), or an arpeggio over a sustained bass. **Up** runs 1 3 5 1' 3' 5 3 1 through the
 triad and its octave, **Down** is the mirror image starting from the top, and
 either pattern plays twice per chord in double time. Arpeggio notes are plain
@@ -118,8 +118,10 @@ the mode: in C major **I vi IV V**, **I iii IV V**, **I V**, **I IV** or **I**;
 in dorian **i III IV**, **i IV** or **i III/6 IV/6** (first inversions whose
 bass walks down from the tonic: C, G below, A); in mixolydian **I v** or
 **I vii**, where the vii bass steps down to the B♭ below the tonic rather than
-up; in lydian **I II V**, **I V** or **I**; the
-pentatonic and hirajoshi scales hold a single **I**.
+up; in lydian **I II V**, **I II I II**, **I II**, **I V** or **I** (the four-chord
+**I II I II** is the two-chord one at double time). The major pentatonic borrows the
+major progressions, harmonised from the full major scale; hirajoshi holds a
+single **I**.
 
 The backing is locked to the sweep. A frame up to about 1000 px wide plays the
 progression once across its duration; every further 1000 px adds another pass
@@ -131,7 +133,9 @@ the score, they follow speed changes, seeks and loops exactly like the ink.
 
 The extension rail opens a transport panel with play/stop, a speed slider
 (px per second — this is what sets the duration), attack (0 to 300 ms, default
-20 ms — how long each voice takes to reach full level), volume and reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
+20 ms — how long each voice takes to reach full level), a **Notes** level for
+the drawn voices, a **Backing** level that appears only while a progression is
+selected, and reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
 any tails, and
 an **Add Serene frame** button with a count of the frames on the board. Every
 knob and the scale are remembered across sessions in the driver's key/value

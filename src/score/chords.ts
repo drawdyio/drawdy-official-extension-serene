@@ -1,4 +1,4 @@
-import { Scale, ScaleId } from "./pitch";
+import { Scale, ScaleId, getScale } from "./pitch";
 
 export type Voicing = "bass" | "omit3" | "full";
 export type ArpPattern = "arp-up" | "arp-down";
@@ -63,24 +63,36 @@ function progression(symbols: string): Progression {
     };
 }
 
+const MAJOR_PROGRESSIONS: Progression[] = [
+    progression("I vi IV V"),
+    progression("I iii IV V"),
+    progression("I V"),
+    progression("I IV"),
+    progression("I"),
+];
+
 const PROGRESSIONS: Record<ScaleId, Progression[]> = {
-    major: [
-        progression("I vi IV V"),
-        progression("I iii IV V"),
-        progression("I V"),
-        progression("I IV"),
-        progression("I"),
-    ],
+    major: MAJOR_PROGRESSIONS,
     dorian: [
         progression("i III IV"),
         progression("i IV"),
         progression("i III/6 IV/6"),
     ],
     mixolydian: [progression("I v"), progression("I vii")],
-    lydian: [progression("I II V"), progression("I V"), progression("I")],
-    "major-pentatonic": [progression("I")],
+    lydian: [
+        progression("I II V"),
+        progression("I II I II"),
+        progression("I II"),
+        progression("I V"),
+        progression("I"),
+    ],
+    "major-pentatonic": MAJOR_PROGRESSIONS,
     japanese: [progression("I")],
 };
+
+export function harmonyScale(scale: Scale): Scale {
+    return scale.id === "major-pentatonic" ? getScale("major") : scale;
+}
 
 export function progressionsFor(scaleId: ScaleId): Progression[] {
     return PROGRESSIONS[scaleId];
@@ -168,6 +180,7 @@ export function backingHits(
     options: BackingOptions
 ): BackingHit[] {
     const prog = pickProgression(scale.id, options.progression);
+    const harmony = harmonyScale(scale);
     const count = progressionCount(frameWidth);
     const progressionSec = durationSec / count;
     const chordSec = progressionSec / prog.chords.length;
@@ -175,7 +188,7 @@ export function backingHits(
     for (let pass = 0; pass < count; pass++) {
         let previousBass: number | undefined;
         prog.chords.forEach((spec, chordIndex) => {
-            const chord = chordTones(scale, spec, previousBass);
+            const chord = chordTones(harmony, spec, previousBass);
             previousBass = chord.bass;
             const chordStart = pass * progressionSec + chordIndex * chordSec;
             if (isArp(options.rhythm)) {

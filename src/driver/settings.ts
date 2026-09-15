@@ -19,13 +19,13 @@ const SETTINGS_KEY = "settings";
 
 export type KnobSettings = {
     attack: number;
-    volume: number;
+    notes: number;
+    backingLevel: number;
     reverb: number;
 };
 
 export type BackingSettings = BackingOptions & {
     enabled: boolean;
-    volume: number;
 };
 
 export type SereneSettings = KnobSettings & {
@@ -42,7 +42,6 @@ export const DEFAULT_BACKING: BackingSettings = {
     progression: 0,
     voicing: "full",
     rhythm: 1,
-    volume: 0.5,
 };
 
 export const DEFAULT_SETTINGS: SereneSettings = {
@@ -52,7 +51,8 @@ export const DEFAULT_SETTINGS: SereneSettings = {
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
-    volume: 0.7,
+    notes: 0.8,
+    backingLevel: 0.7,
     reverb: 0.38,
     backing: DEFAULT_BACKING,
 };
@@ -83,13 +83,13 @@ export function sanitizeBacking(
         progression,
         voicing,
         rhythm,
-        volume: clampNumber(record.volume, 0, 1, current.volume),
     };
 }
 
 const KNOB_RANGES: Record<keyof KnobSettings, [number, number]> = {
     attack: [0, 0.3],
-    volume: [0, 1],
+    notes: [0, 1],
+    backingLevel: [0, 1],
     reverb: [0, 1],
 };
 

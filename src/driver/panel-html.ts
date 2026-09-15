@@ -233,6 +233,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     gap: 4px;
     padding: 14px 4px 12px;
 }
+.rack.five { grid-template-columns: repeat(5, 1fr); }
+.knob[hidden] { display: none; }
 .knob {
     display: flex;
     flex-direction: column;
@@ -304,14 +306,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
 .add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
 .add-frame:disabled { opacity: 0.5; cursor: default; }
-.level {
-    flex: 1;
-    min-width: 0;
-    height: 30px;
-    margin: 0;
-    accent-color: var(--drawdy-primary, #6366f1);
-    cursor: pointer;
-}
 .card.backing-off .backing-only { display: none; }
 .card.arp-mode .voicing-row { display: none; }
 .status {
@@ -387,11 +381,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
                 <option value="arp-down">Arpeggio down</option>
             </select>
         </div>
-        <div class="row backing-only">
-            <label for="backing-level">Level</label>
-            <input id="backing-level" class="level" type="range" min="0" max="1" step="0.01" value="0.5" />
-            <span class="val" id="backing-level-val">50%</span>
-        </div>
     </section>
 
     <section class="card">
@@ -442,10 +431,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var backingProg = document.getElementById("backing-prog");
     var backingVoicing = document.getElementById("backing-voicing");
     var backingRhythm = document.getElementById("backing-rhythm");
-    var backingLevel = document.getElementById("backing-level");
-    var backingLevelVal = document.getElementById("backing-level-val");
     var backingCard = backingProg.closest(".card");
-    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1, volume: 0.5 };
+    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1 };
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
 
@@ -480,8 +467,17 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             format: function (v) { return Math.round(v * 1000) + "ms"; },
         },
         {
-            id: "volume",
-            label: "Volume",
+            id: "notes",
+            label: "Notes",
+            min: 0,
+            max: 1,
+            step: 0.01,
+            value: 0.8,
+            format: asPercent,
+        },
+        {
+            id: "backingLevel",
+            label: "Backing",
             min: 0,
             max: 1,
             step: 0.01,
@@ -653,7 +649,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
     var speedInput = knobs.speed.input;
     var attackInput = knobs.attack.input;
-    var volumeInput = knobs.volume.input;
+    var backingLevelInput = knobs.backingLevel.input;
+    var notesInput = knobs.notes.input;
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
@@ -721,7 +718,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (!Ctor) return null;
         var ctx = new Ctor();
         var master = ctx.createGain();
-        master.gain.value = Number(volumeInput.value);
+        master.gain.value = 1;
         master.connect(ctx.destination);
         var trim = ctx.createGain();
         trim.gain.value = LIMIT_TRIM;
@@ -859,7 +856,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * backing.volume;
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * Number(backingLevelInput.value);
+        else peak *= Number(notesInput.value);
         var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
         var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
@@ -1224,6 +1222,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
     }
 
+    function showBackingKnob(enabled) {
+        knobs.backingLevel.el.hidden = !enabled;
+        rack.classList.toggle("five", enabled);
+    }
+    showBackingKnob(false);
+
     function showBacking(progressions, value) {
         backing = value;
         backingProg.textContent = "";
@@ -1241,9 +1245,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         backingVoicing.value = value.voicing;
         backingRhythm.value = String(value.rhythm);
         backingCard.classList.toggle("arp-mode", typeof value.rhythm === "string");
-        backingLevel.value = String(value.volume);
-        backingLevelVal.textContent = Math.round(value.volume * 100) + "%";
         backingCard.classList.toggle("backing-off", !value.enabled);
+        showBackingKnob(value.enabled);
     }
 
     function postBacking() {
@@ -1253,22 +1256,16 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             progression: choice === "off" ? backing.progression : Number(choice),
             voicing: backingVoicing.value,
             rhythm: isNaN(Number(backingRhythm.value)) ? backingRhythm.value : Number(backingRhythm.value),
-            volume: Number(backingLevel.value),
         };
-        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
         backingCard.classList.toggle("backing-off", !backing.enabled);
         backingCard.classList.toggle("arp-mode", typeof backing.rhythm === "string");
+        showBackingKnob(backing.enabled);
         api.postMessage({ type: "backing", value: backing });
     }
 
     backingProg.addEventListener("change", postBacking);
     backingVoicing.addEventListener("change", postBacking);
     backingRhythm.addEventListener("change", postBacking);
-    backingLevel.addEventListener("input", function () {
-        backing.volume = Number(backingLevel.value);
-        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
-    });
-    backingLevel.addEventListener("change", postBacking);
 
     function setFrames(count) {
         frameCountEl.textContent = String(count);
@@ -1303,18 +1300,19 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             type: "knobs",
             values: {
                 attack: Number(attackInput.value),
-                volume: Number(volumeInput.value),
+                notes: Number(notesInput.value),
+                backingLevel: Number(backingLevelInput.value),
                 reverb: Number(reverbInput.value),
             },
         });
     }
 
-    [attackInput, volumeInput, reverbInput].forEach(function (input) {
+    [attackInput, notesInput, backingLevelInput, reverbInput].forEach(function (input) {
         input.addEventListener("change", postKnobs);
     });
 
     function applySettings(values) {
-        ["attack", "volume", "reverb"].forEach(function (key) {
+        ["attack", "notes", "backingLevel", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") {
                 applyKnob(knobs[key], values[key], false, true);
             }
@@ -1327,14 +1325,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             showRange(values.lowOctave, values.highOctave);
         }
         if (audio) {
-            audio.master.gain.value = Number(volumeInput.value);
-            audio.wet.gain.value = Number(reverbInput.value);
+            audio.wet.gain.setTargetAtTime(Number(reverbInput.value), audio.ctx.currentTime, 0.02);
         }
     }
-
-    volumeInput.addEventListener("input", function () {
-        if (audio) audio.master.gain.value = Number(volumeInput.value);
-    });
 
     reverbInput.addEventListener("input", function () {
         if (audio) audio.wet.gain.value = Number(reverbInput.value);

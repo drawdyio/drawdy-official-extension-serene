@@ -32,179 +32,6 @@ async function registerMenus(ctx) {
     }
 }
 
-const ARP_PATTERNS = ["arp-up", "arp-down"];
-function isArp(rhythm) {
-    return typeof rhythm === "string";
-}
-const BASS_OCTAVE_MIDI = 36;
-const CHORD_OCTAVE_MIDI = 48;
-const DESCEND_FROM_SEMITONES = 10;
-const PROGRESSION_SPAN_PX = 1000;
-const BACKING_VELOCITY = 0.85;
-const BASS_VELOCITY = 1;
-const ARP_VELOCITY = 0.8;
-const SUSTAIN_PORTION = 0.85;
-const ARP_STEPS_PER_CHORD = 16;
-const ARP_NOTE_PORTION = 0.9;
-const ARP_SHAPES = {
-    "arp-up": [0, 1, 2, 3, 4, 2, 1, 0],
-    "arp-down": [4, 3, 2, 1, 0, 2, 3, 4],
-};
-function arpIndex(pattern, step, toneCount) {
-    const shape = ARP_SHAPES[pattern];
-    return shape[step % shape.length] % toneCount;
-}
-const ROMAN = {
-    i: 0,
-    ii: 1,
-    iii: 2,
-    iv: 3,
-    v: 4,
-    vi: 5,
-    vii: 6,
-};
-function chord(symbol) {
-    const [numeral, suffix] = symbol.split("/");
-    const degree = ROMAN[numeral.toLowerCase()];
-    return { degree, inversion: suffix === "6" ? 1 : 0 };
-}
-function progression(symbols) {
-    return {
-        name: symbols,
-        chords: symbols.split(" ").map(chord),
-    };
-}
-const PROGRESSIONS = {
-    major: [
-        progression("I vi IV V"),
-        progression("I iii IV V"),
-        progression("I V"),
-        progression("I IV"),
-        progression("I"),
-    ],
-    dorian: [
-        progression("i III IV"),
-        progression("i IV"),
-        progression("i III/6 IV/6"),
-    ],
-    mixolydian: [progression("I v"), progression("I vii")],
-    lydian: [progression("I II V"), progression("I V"), progression("I")],
-    "major-pentatonic": [progression("I")],
-    japanese: [progression("I")],
-};
-function progressionsFor(scaleId) {
-    return PROGRESSIONS[scaleId];
-}
-function pickProgression(scaleId, index) {
-    const list = progressionsFor(scaleId);
-    const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
-    return list[clamped];
-}
-function triadSemitones(scale, degree) {
-    const steps = scale.steps;
-    if (steps.length !== 7) {
-        const third = steps.includes(4) ? 4 : 3;
-        return [0, third, 7];
-    }
-    const root = steps[degree % 7];
-    const at = (offset) => {
-        const index = (degree + offset) % 7;
-        const wrapped = Math.floor((degree + offset) / 7) * 12;
-        return steps[index] + wrapped - root;
-    };
-    return [0, at(2), at(4)];
-}
-function nearestOctave(pitchClass, reference) {
-    const below = reference - ((((reference - pitchClass) % 12) + 12) % 12);
-    const above = below + 12;
-    return reference - below <= above - reference ? below : above;
-}
-function chordTones(scale, spec, previousBass) {
-    const root = scale.steps.length === 7 ? scale.steps[spec.degree % 7] : 0;
-    const [, third, fifth] = triadSemitones(scale, spec.degree);
-    const order = spec.inversion === 1 ? [third, fifth, 12] : [0, third, fifth];
-    const bassInterval = spec.inversion === 1 ? third : 0;
-    const octaveShift = root >= DESCEND_FROM_SEMITONES ? -12 : 0;
-    const bassClass = (root + bassInterval) % 12;
-    const bass = spec.inversion === 1 && previousBass !== undefined
-        ? nearestOctave(bassClass, previousBass)
-        : BASS_OCTAVE_MIDI + bassClass + octaveShift;
-    const upper = order.map((interval) => CHORD_OCTAVE_MIDI + root + interval + octaveShift);
-    return { bass, upper };
-}
-function voiceTones(tones, voicing, inversion) {
-    if (voicing === "bass")
-        return [tones.bass];
-    if (voicing === "omit3") {
-        const withoutThird = inversion === 1
-            ? [tones.upper[1], tones.upper[2]]
-            : [tones.upper[0], tones.upper[2]];
-        return [tones.bass, ...withoutThird];
-    }
-    return [tones.bass, ...tones.upper];
-}
-function progressionCount(frameWidth) {
-    return Math.max(1, Math.round(frameWidth / PROGRESSION_SPAN_PX));
-}
-function backingHits(scale, frameWidth, durationSec, options) {
-    const prog = pickProgression(scale.id, options.progression);
-    const count = progressionCount(frameWidth);
-    const progressionSec = durationSec / count;
-    const chordSec = progressionSec / prog.chords.length;
-    const hits = [];
-    for (let pass = 0; pass < count; pass++) {
-        let previousBass;
-        prog.chords.forEach((spec, chordIndex) => {
-            const chord = chordTones(scale, spec, previousBass);
-            previousBass = chord.bass;
-            const chordStart = pass * progressionSec + chordIndex * chordSec;
-            if (isArp(options.rhythm)) {
-                hits.push({
-                    startSec: chordStart,
-                    durationSec: chordSec * SUSTAIN_PORTION,
-                    midi: chord.bass,
-                    velocity: BASS_VELOCITY,
-                    arp: false,
-                });
-                const arpTones = [
-                    ...chord.upper,
-                    chord.upper[0] + 12,
-                    chord.upper[1] + 12,
-                ];
-                const stepSec = chordSec / ARP_STEPS_PER_CHORD;
-                for (let step = 0; step < ARP_STEPS_PER_CHORD; step++) {
-                    const index = arpIndex(options.rhythm, step, arpTones.length);
-                    hits.push({
-                        startSec: chordStart + step * stepSec,
-                        durationSec: stepSec * ARP_NOTE_PORTION,
-                        midi: arpTones[index],
-                        velocity: ARP_VELOCITY,
-                        arp: true,
-                    });
-                }
-                return;
-            }
-            const strikes = options.rhythm;
-            const hitSec = chordSec / strikes;
-            const holdSec = strikes === 1 ? hitSec * SUSTAIN_PORTION : hitSec;
-            const tones = voiceTones(chord, options.voicing, spec.inversion);
-            for (let hit = 0; hit < strikes; hit++) {
-                const startSec = chordStart + hit * hitSec;
-                tones.forEach((midi, toneIndex) => {
-                    hits.push({
-                        startSec,
-                        durationSec: holdSec,
-                        midi,
-                        velocity: toneIndex === 0 ? BASS_VELOCITY : BACKING_VELOCITY,
-                        arp: false,
-                    });
-                });
-            }
-        });
-    }
-    return hits;
-}
-
 const SCALES = [
     {
         id: "major-pentatonic",
@@ -266,6 +93,190 @@ function yToRow(scale, range, y, top, height) {
     const rows = scaleRows(scale, range);
     const fromBottom = 1 - (y - top) / height;
     return Math.max(0, Math.min(rows - 1, Math.floor(fromBottom * rows)));
+}
+
+const ARP_PATTERNS = ["arp-up", "arp-down"];
+function isArp(rhythm) {
+    return typeof rhythm === "string";
+}
+const BASS_OCTAVE_MIDI = 36;
+const CHORD_OCTAVE_MIDI = 48;
+const DESCEND_FROM_SEMITONES = 10;
+const PROGRESSION_SPAN_PX = 1000;
+const BACKING_VELOCITY = 0.85;
+const BASS_VELOCITY = 1;
+const ARP_VELOCITY = 0.8;
+const SUSTAIN_PORTION = 0.85;
+const ARP_STEPS_PER_CHORD = 16;
+const ARP_NOTE_PORTION = 0.9;
+const ARP_SHAPES = {
+    "arp-up": [0, 1, 2, 3, 4, 2, 1, 0],
+    "arp-down": [4, 3, 2, 1, 0, 2, 3, 4],
+};
+function arpIndex(pattern, step, toneCount) {
+    const shape = ARP_SHAPES[pattern];
+    return shape[step % shape.length] % toneCount;
+}
+const ROMAN = {
+    i: 0,
+    ii: 1,
+    iii: 2,
+    iv: 3,
+    v: 4,
+    vi: 5,
+    vii: 6,
+};
+function chord(symbol) {
+    const [numeral, suffix] = symbol.split("/");
+    const degree = ROMAN[numeral.toLowerCase()];
+    return { degree, inversion: suffix === "6" ? 1 : 0 };
+}
+function progression(symbols) {
+    return {
+        name: symbols,
+        chords: symbols.split(" ").map(chord),
+    };
+}
+const MAJOR_PROGRESSIONS = [
+    progression("I vi IV V"),
+    progression("I iii IV V"),
+    progression("I V"),
+    progression("I IV"),
+    progression("I"),
+];
+const PROGRESSIONS = {
+    major: MAJOR_PROGRESSIONS,
+    dorian: [
+        progression("i III IV"),
+        progression("i IV"),
+        progression("i III/6 IV/6"),
+    ],
+    mixolydian: [progression("I v"), progression("I vii")],
+    lydian: [
+        progression("I II V"),
+        progression("I II I II"),
+        progression("I II"),
+        progression("I V"),
+        progression("I"),
+    ],
+    "major-pentatonic": MAJOR_PROGRESSIONS,
+    japanese: [progression("I")],
+};
+function harmonyScale(scale) {
+    return scale.id === "major-pentatonic" ? getScale("major") : scale;
+}
+function progressionsFor(scaleId) {
+    return PROGRESSIONS[scaleId];
+}
+function pickProgression(scaleId, index) {
+    const list = progressionsFor(scaleId);
+    const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
+    return list[clamped];
+}
+function triadSemitones(scale, degree) {
+    const steps = scale.steps;
+    if (steps.length !== 7) {
+        const third = steps.includes(4) ? 4 : 3;
+        return [0, third, 7];
+    }
+    const root = steps[degree % 7];
+    const at = (offset) => {
+        const index = (degree + offset) % 7;
+        const wrapped = Math.floor((degree + offset) / 7) * 12;
+        return steps[index] + wrapped - root;
+    };
+    return [0, at(2), at(4)];
+}
+function nearestOctave(pitchClass, reference) {
+    const below = reference - ((((reference - pitchClass) % 12) + 12) % 12);
+    const above = below + 12;
+    return reference - below <= above - reference ? below : above;
+}
+function chordTones(scale, spec, previousBass) {
+    const root = scale.steps.length === 7 ? scale.steps[spec.degree % 7] : 0;
+    const [, third, fifth] = triadSemitones(scale, spec.degree);
+    const order = spec.inversion === 1 ? [third, fifth, 12] : [0, third, fifth];
+    const bassInterval = spec.inversion === 1 ? third : 0;
+    const octaveShift = root >= DESCEND_FROM_SEMITONES ? -12 : 0;
+    const bassClass = (root + bassInterval) % 12;
+    const bass = spec.inversion === 1 && previousBass !== undefined
+        ? nearestOctave(bassClass, previousBass)
+        : BASS_OCTAVE_MIDI + bassClass + octaveShift;
+    const upper = order.map((interval) => CHORD_OCTAVE_MIDI + root + interval + octaveShift);
+    return { bass, upper };
+}
+function voiceTones(tones, voicing, inversion) {
+    if (voicing === "bass")
+        return [tones.bass];
+    if (voicing === "omit3") {
+        const withoutThird = inversion === 1
+            ? [tones.upper[1], tones.upper[2]]
+            : [tones.upper[0], tones.upper[2]];
+        return [tones.bass, ...withoutThird];
+    }
+    return [tones.bass, ...tones.upper];
+}
+function progressionCount(frameWidth) {
+    return Math.max(1, Math.round(frameWidth / PROGRESSION_SPAN_PX));
+}
+function backingHits(scale, frameWidth, durationSec, options) {
+    const prog = pickProgression(scale.id, options.progression);
+    const harmony = harmonyScale(scale);
+    const count = progressionCount(frameWidth);
+    const progressionSec = durationSec / count;
+    const chordSec = progressionSec / prog.chords.length;
+    const hits = [];
+    for (let pass = 0; pass < count; pass++) {
+        let previousBass;
+        prog.chords.forEach((spec, chordIndex) => {
+            const chord = chordTones(harmony, spec, previousBass);
+            previousBass = chord.bass;
+            const chordStart = pass * progressionSec + chordIndex * chordSec;
+            if (isArp(options.rhythm)) {
+                hits.push({
+                    startSec: chordStart,
+                    durationSec: chordSec * SUSTAIN_PORTION,
+                    midi: chord.bass,
+                    velocity: BASS_VELOCITY,
+                    arp: false,
+                });
+                const arpTones = [
+                    ...chord.upper,
+                    chord.upper[0] + 12,
+                    chord.upper[1] + 12,
+                ];
+                const stepSec = chordSec / ARP_STEPS_PER_CHORD;
+                for (let step = 0; step < ARP_STEPS_PER_CHORD; step++) {
+                    const index = arpIndex(options.rhythm, step, arpTones.length);
+                    hits.push({
+                        startSec: chordStart + step * stepSec,
+                        durationSec: stepSec * ARP_NOTE_PORTION,
+                        midi: arpTones[index],
+                        velocity: ARP_VELOCITY,
+                        arp: true,
+                    });
+                }
+                return;
+            }
+            const strikes = options.rhythm;
+            const hitSec = chordSec / strikes;
+            const holdSec = strikes === 1 ? hitSec * SUSTAIN_PORTION : hitSec;
+            const tones = voiceTones(chord, options.voicing, spec.inversion);
+            for (let hit = 0; hit < strikes; hit++) {
+                const startSec = chordStart + hit * hitSec;
+                tones.forEach((midi, toneIndex) => {
+                    hits.push({
+                        startSec,
+                        durationSec: holdSec,
+                        midi,
+                        velocity: toneIndex === 0 ? BASS_VELOCITY : BACKING_VELOCITY,
+                        arp: false,
+                    });
+                });
+            }
+        });
+    }
+    return hits;
 }
 
 const PANEL_HTML = `<!doctype html>
@@ -503,6 +514,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     gap: 4px;
     padding: 14px 4px 12px;
 }
+.rack.five { grid-template-columns: repeat(5, 1fr); }
+.knob[hidden] { display: none; }
 .knob {
     display: flex;
     flex-direction: column;
@@ -574,14 +587,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
 .add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
 .add-frame:disabled { opacity: 0.5; cursor: default; }
-.level {
-    flex: 1;
-    min-width: 0;
-    height: 30px;
-    margin: 0;
-    accent-color: var(--drawdy-primary, #6366f1);
-    cursor: pointer;
-}
 .card.backing-off .backing-only { display: none; }
 .card.arp-mode .voicing-row { display: none; }
 .status {
@@ -657,11 +662,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
                 <option value="arp-down">Arpeggio down</option>
             </select>
         </div>
-        <div class="row backing-only">
-            <label for="backing-level">Level</label>
-            <input id="backing-level" class="level" type="range" min="0" max="1" step="0.01" value="0.5" />
-            <span class="val" id="backing-level-val">50%</span>
-        </div>
     </section>
 
     <section class="card">
@@ -712,10 +712,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var backingProg = document.getElementById("backing-prog");
     var backingVoicing = document.getElementById("backing-voicing");
     var backingRhythm = document.getElementById("backing-rhythm");
-    var backingLevel = document.getElementById("backing-level");
-    var backingLevelVal = document.getElementById("backing-level-val");
     var backingCard = backingProg.closest(".card");
-    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1, volume: 0.5 };
+    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1 };
     var addFrameBtn = document.getElementById("add-frame");
     var frameCountEl = document.getElementById("frame-count");
 
@@ -750,8 +748,17 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             format: function (v) { return Math.round(v * 1000) + "ms"; },
         },
         {
-            id: "volume",
-            label: "Volume",
+            id: "notes",
+            label: "Notes",
+            min: 0,
+            max: 1,
+            step: 0.01,
+            value: 0.8,
+            format: asPercent,
+        },
+        {
+            id: "backingLevel",
+            label: "Backing",
             min: 0,
             max: 1,
             step: 0.01,
@@ -923,7 +930,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
     var speedInput = knobs.speed.input;
     var attackInput = knobs.attack.input;
-    var volumeInput = knobs.volume.input;
+    var backingLevelInput = knobs.backingLevel.input;
+    var notesInput = knobs.notes.input;
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
@@ -991,7 +999,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (!Ctor) return null;
         var ctx = new Ctor();
         var master = ctx.createGain();
-        master.gain.value = Number(volumeInput.value);
+        master.gain.value = 1;
         master.connect(ctx.destination);
         var trim = ctx.createGain();
         trim.gain.value = LIMIT_TRIM;
@@ -1129,7 +1137,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * backing.volume;
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * Number(backingLevelInput.value);
+        else peak *= Number(notesInput.value);
         var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
         var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
@@ -1494,6 +1503,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
     }
 
+    function showBackingKnob(enabled) {
+        knobs.backingLevel.el.hidden = !enabled;
+        rack.classList.toggle("five", enabled);
+    }
+    showBackingKnob(false);
+
     function showBacking(progressions, value) {
         backing = value;
         backingProg.textContent = "";
@@ -1511,9 +1526,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         backingVoicing.value = value.voicing;
         backingRhythm.value = String(value.rhythm);
         backingCard.classList.toggle("arp-mode", typeof value.rhythm === "string");
-        backingLevel.value = String(value.volume);
-        backingLevelVal.textContent = Math.round(value.volume * 100) + "%";
         backingCard.classList.toggle("backing-off", !value.enabled);
+        showBackingKnob(value.enabled);
     }
 
     function postBacking() {
@@ -1523,22 +1537,16 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             progression: choice === "off" ? backing.progression : Number(choice),
             voicing: backingVoicing.value,
             rhythm: isNaN(Number(backingRhythm.value)) ? backingRhythm.value : Number(backingRhythm.value),
-            volume: Number(backingLevel.value),
         };
-        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
         backingCard.classList.toggle("backing-off", !backing.enabled);
         backingCard.classList.toggle("arp-mode", typeof backing.rhythm === "string");
+        showBackingKnob(backing.enabled);
         api.postMessage({ type: "backing", value: backing });
     }
 
     backingProg.addEventListener("change", postBacking);
     backingVoicing.addEventListener("change", postBacking);
     backingRhythm.addEventListener("change", postBacking);
-    backingLevel.addEventListener("input", function () {
-        backing.volume = Number(backingLevel.value);
-        backingLevelVal.textContent = Math.round(backing.volume * 100) + "%";
-    });
-    backingLevel.addEventListener("change", postBacking);
 
     function setFrames(count) {
         frameCountEl.textContent = String(count);
@@ -1573,18 +1581,19 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             type: "knobs",
             values: {
                 attack: Number(attackInput.value),
-                volume: Number(volumeInput.value),
+                notes: Number(notesInput.value),
+                backingLevel: Number(backingLevelInput.value),
                 reverb: Number(reverbInput.value),
             },
         });
     }
 
-    [attackInput, volumeInput, reverbInput].forEach(function (input) {
+    [attackInput, notesInput, backingLevelInput, reverbInput].forEach(function (input) {
         input.addEventListener("change", postKnobs);
     });
 
     function applySettings(values) {
-        ["attack", "volume", "reverb"].forEach(function (key) {
+        ["attack", "notes", "backingLevel", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") {
                 applyKnob(knobs[key], values[key], false, true);
             }
@@ -1597,14 +1606,9 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             showRange(values.lowOctave, values.highOctave);
         }
         if (audio) {
-            audio.master.gain.value = Number(volumeInput.value);
-            audio.wet.gain.value = Number(reverbInput.value);
+            audio.wet.gain.setTargetAtTime(Number(reverbInput.value), audio.ctx.currentTime, 0.02);
         }
     }
-
-    volumeInput.addEventListener("input", function () {
-        if (audio) audio.master.gain.value = Number(volumeInput.value);
-    });
 
     reverbInput.addEventListener("input", function () {
         if (audio) audio.wet.gain.value = Number(reverbInput.value);
@@ -2638,7 +2642,6 @@ const DEFAULT_BACKING = {
     progression: 0,
     voicing: "full",
     rhythm: 1,
-    volume: 0.5,
 };
 const DEFAULT_SETTINGS = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
@@ -2647,7 +2650,8 @@ const DEFAULT_SETTINGS = {
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
-    volume: 0.7,
+    notes: 0.8,
+    backingLevel: 0.7,
     reverb: 0.38,
     backing: DEFAULT_BACKING,
 };
@@ -2672,12 +2676,12 @@ function sanitizeBacking(raw, scale, current = DEFAULT_BACKING) {
         progression,
         voicing,
         rhythm,
-        volume: clampNumber(record.volume, 0, 1, current.volume),
     };
 }
 const KNOB_RANGES = {
     attack: [0, 0.3],
-    volume: [0, 1],
+    notes: [0, 1],
+    backingLevel: [0, 1],
     reverb: [0, 1],
 };
 function clampNumber(value, min, max, fallback) {
