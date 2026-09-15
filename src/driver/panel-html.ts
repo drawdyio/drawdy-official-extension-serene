@@ -657,6 +657,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var PROGRESS_MS = 33;
     var DECAY = 0.22;
     var MIN_ATTACK = 0.002;
+    var LATE_FADE_IN = 0.02;
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PERCUSSIVE_TAU = 0.32;
@@ -827,6 +828,21 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
     }
 
+    // Freeze a param at its current value and drop everything scheduled after
+    // now. Plain cancelScheduledValues() would also delete a ramp that is in
+    // progress, snapping the param back to the value before the ramp (0 during
+    // an attack, the peak during a decay), which is a loud click.
+    function holdParam(param, now) {
+        if (typeof param.cancelAndHoldAtTime === "function") {
+            param.cancelAndHoldAtTime(now);
+            return param.value;
+        }
+        var level = param.value;
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(level, now);
+        return level;
+    }
+
     function scheduleEnvelope(gain, at, peak, sustain, attack, end) {
         var param = gain.gain;
         var attackEnd = at + attack;
@@ -883,7 +899,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (at >= now) {
             stopAt = scheduleEnvelope(gain, at, peak, sustain, attack, end);
         } else {
-            gain.gain.setValueAtTime(sustain, now);
+            // Joining a note that is already under way: ease in instead of
+            // stepping straight to the sustain level.
+            var joined = now + LATE_FADE_IN;
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(sustain, joined);
+            end = Math.max(end, joined);
             releaseAt(gain, end);
             stopAt = end + RELEASE * 3;
         }
@@ -913,13 +934,11 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var now = ctx.currentTime;
         var at = startTime + note.t;
         var end = Math.max(now, at + holdFor(note));
-        voice.osc.frequency.cancelScheduledValues(now);
+        holdParam(voice.osc.frequency, now);
         schedulePitches(voice.osc, at, note.pitches, now, note.g);
-        var level = Math.max(0.0001, voice.gain.gain.value);
-        voice.gain.gain.cancelScheduledValues(now);
-        voice.gain.gain.setValueAtTime(level, now);
+        var level = holdParam(voice.gain.gain, now);
         if (level > voice.sustain * 1.02) {
-            voice.gain.gain.exponentialRampToValueAtTime(
+            voice.gain.gain.linearRampToValueAtTime(
                 voice.sustain,
                 Math.min(end, now + DECAY)
             );
@@ -936,8 +955,17 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var index = voices.indexOf(voice);
         if (index >= 0) voices.splice(index, 1);
         try {
-            voice.gain.gain.cancelScheduledValues(now);
-            voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
+            var param = voice.gain.gain;
+            if (voice.start > now) {
+                // Not sounding yet. Cancelling its envelope would leave the
+                // gain at the node default of 1, so pin it to silence.
+                param.cancelScheduledValues(0);
+                param.setValueAtTime(0, now);
+                voice.osc.stop(Math.max(now, voice.start) + 0.005);
+                return;
+            }
+            holdParam(param, now);
+            param.setTargetAtTime(0.0001, now, 0.03);
             voice.osc.stop(now + 0.25);
         } catch (err) {
             void err;
@@ -1330,7 +1358,13 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     }
 
     reverbInput.addEventListener("input", function () {
-        if (audio) audio.wet.gain.value = Number(reverbInput.value);
+        if (audio) {
+            audio.wet.gain.setTargetAtTime(
+                Number(reverbInput.value),
+                audio.ctx.currentTime,
+                0.02
+            );
+        }
     });
 
     function postRange(changed) {
