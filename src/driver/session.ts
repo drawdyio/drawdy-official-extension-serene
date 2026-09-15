@@ -1,7 +1,6 @@
 import { ModuleStyling, SubscribedDrawdyElement } from "@drawdy/driver-protocol";
-import { Polyline, Rect, rectsOverlap } from "../score/geometry";
-import { elementBounds } from "../score/ink";
-import { sceneInk } from "../score/ink";
+import { Rect, rectsOverlap } from "../score/geometry";
+import { Ink, elementBounds, laserInk, sceneInk } from "../score/ink";
 import { getScale } from "../score/pitch";
 import { Score, buildScore, clampSpeed, playheadX } from "../score/score";
 import { Ctx } from "./context";
@@ -35,7 +34,8 @@ function sameRect(a: Rect, b: Rect): boolean {
 export class SereneSession {
     private _score: Score | null = null;
     private _rect: Rect | null = null;
-    private _lines: Polyline[] = [];
+    private _lines: Ink[] = [];
+    private _laser: Ink[] = [];
     private _elementCount = 0;
     private _settings: SereneSettings = DEFAULT_SETTINGS;
     private _pointer: { x: number; y: number } | null = null;
@@ -147,6 +147,13 @@ export class SereneSession {
         this._postScore(true);
     }
 
+    public setLaser(strokes: readonly (readonly [number, number][])[]): void {
+        this._laser = laserInk(strokes);
+        if (!this._rect) return;
+        this._rebuild();
+        this._postScore(false, true);
+    }
+
     public onSceneChanged(changed: SubscribedDrawdyElement[]): void {
         const rect = this._rect;
         if (!rect) return;
@@ -230,6 +237,9 @@ export class SereneSession {
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "loop":
+                this._updateSettings({ loop: message.value === true });
+                return;
             case "knobs":
                 this._updateSettings(sanitizeKnobs(message.values, this._settings));
                 return;
@@ -250,7 +260,7 @@ export class SereneSession {
 
     private _rebuild(): void {
         if (!this._rect) return;
-        this._score = buildScore(this._rect, this._lines, {
+        this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
             pxPerSecond: this._settings.speed,
             scale: this._settings.scale,
         });

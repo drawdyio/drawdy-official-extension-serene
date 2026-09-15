@@ -52,7 +52,10 @@ the Serene frame under the cursor.
 ## What gets played
 
 The region is the frame's bounds. Everything intersecting that region becomes
-ink. The score follows the board live: drawing, moving or deleting anything
+ink, and each element's opacity sets the loudness of the voices it produces, so a
+stroke at 50% opacity plays at half volume and a fully transparent one is
+silent. Laser pointer trails count as ink while they are visible: draw with the
+laser inside a playing frame and the trail sounds until it fades. The score follows the board live: drawing, moving or deleting anything
 inside the frame, or moving the frame itself, rebuilds the score, and while the
 frame is playing the new voices are slotted in ahead of the playhead so a stroke
 you add mid-sweep still sounds when the playhead reaches it. Shapes contribute their
@@ -92,7 +95,8 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 The extension rail opens a transport panel with play/stop, a speed slider
 (px per second — this is what sets the duration), attack (0 to 300 ms, default
 20 ms — how long each voice takes to reach full level), volume, glide and
-reverb, and
+reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
+any tails, and
 an **Add Serene frame** button with a count of the frames on the board. Every
 knob and the scale are remembered across sessions in the driver's key/value
 storage, which is why the manifest asks for the `storage` permission.

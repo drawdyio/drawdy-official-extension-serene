@@ -45,6 +45,7 @@ export type PanelToDriver =
     | { type: "progress"; t: number }
     | { type: "speed"; value: number }
     | { type: "knobs"; values: Record<string, unknown> }
+    | { type: "loop"; value: boolean }
     | { type: "add-frame" };
 
 export type DriverToPanel =

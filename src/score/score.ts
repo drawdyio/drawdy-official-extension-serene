@@ -1,4 +1,5 @@
 import { Polyline, Rect, evenPick, monotonicRuns } from "./geometry";
+import { Ink } from "./ink";
 import {
     DEFAULT_SCALE_ID,
     Scale,
@@ -165,7 +166,8 @@ function decimate(pitches: PitchPoint[]): PitchPoint[] {
 function toVoice(
     groups: ColumnGroup[],
     grid: Grid,
-    stepSec: number
+    stepSec: number,
+    gain: number
 ): Voice | null {
     if (groups.length === 0) return null;
     const firstColumn = groups[0].column;
@@ -191,26 +193,30 @@ function toVoice(
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
         velocity:
-            MIN_VELOCITY +
-            (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS),
+            gain *
+            (MIN_VELOCITY +
+                (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS)),
         pitches: decimate(pitches),
     };
 }
 
+type Strand = { cells: Cell[]; gain: number };
+
 function buildVoices(
-    lines: Polyline[],
+    ink: Ink[],
     grid: Grid,
     stepSec: number,
     maxVoices: number
 ): Voice[] {
     const sampleStep = Math.max(0.5, Math.min(grid.colWidth, grid.rowHeight) / 2);
-    const strands: Cell[][] = [];
+    const strands: Strand[] = [];
 
-    for (const line of lines) {
-        for (const run of monotonicRuns(line)) {
+    for (const { points, gain } of ink) {
+        if (gain <= 0) continue;
+        for (const run of monotonicRuns(points)) {
             let pending: Cell[] = [];
             const flush = (): void => {
-                if (pending.length > 0) strands.push(pending);
+                if (pending.length > 0) strands.push({ cells: pending, gain });
                 pending = [];
             };
             walkRun(run, grid, sampleStep, (cell) => {
@@ -226,7 +232,9 @@ function buildVoices(
     }
 
     const voices = strands
-        .map((strand) => toVoice(groupByColumn(strand), grid, stepSec))
+        .map((strand) =>
+            toVoice(groupByColumn(strand.cells), grid, stepSec, strand.gain)
+        )
         .filter((voice): voice is Voice => voice !== null);
 
     const byColumn = new Map<number, Voice[]>();
@@ -249,7 +257,7 @@ function buildVoices(
 
 export function buildScore(
     rect: Rect,
-    lines: Polyline[],
+    ink: Ink[],
     options: Partial<ScoreOptions> = {}
 ): Score {
     const { pxPerSecond, stepsPerSecond, maxVoices, scale } = {
@@ -271,7 +279,7 @@ export function buildScore(
     const stepSec = durationSec / columns;
     const normalized: Rect = { x: rect.x, y: rect.y, width, height };
     const grid = new Grid(normalized, columns, resolved);
-    const voices = buildVoices(lines, grid, stepSec, maxVoices);
+    const voices = buildVoices(ink, grid, stepSec, maxVoices);
 
     return {
         rect: normalized,

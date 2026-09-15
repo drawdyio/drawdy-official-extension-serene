@@ -219,6 +219,32 @@ body.playing .dial::before {
         box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 16px color-mix(in oklab, var(--drawdy-primary, #6366f1) 0%, transparent);
     }
 }
+.meter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.loop {
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--drawdy-border, #e5e5e5);
+    background: transparent;
+    color: var(--drawdy-muted-foreground, #888);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.loop:hover { border-color: var(--drawdy-primary, #6366f1); }
+.loop:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
+.loop[aria-pressed="true"] {
+    color: var(--drawdy-primary, #6366f1);
+    border-color: var(--drawdy-primary, #6366f1);
+    background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 12%, transparent);
+}
 .time {
     font-variant-numeric: tabular-nums;
     font-size: 12px;
@@ -384,7 +410,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-icon" d="M9 5.5v13l10-6.5z"/></svg>
             </button>
         </div>
-        <div class="time" id="time"><b>0.0</b> / 0.0s</div>
+        <div class="meter">
+            <div class="time" id="time"><b>0.0</b> / 0.0s</div>
+            <button id="loop" type="button" class="loop" aria-pressed="false" aria-label="Loop">&#8635; Loop</button>
+        </div>
     </div>
 
     <section class="card">
@@ -414,6 +443,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var playIcon = document.getElementById("play-icon");
     var ring = document.getElementById("ring");
     var timeEl = document.getElementById("time");
+    var loopBtn = document.getElementById("loop");
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
     var rack = document.getElementById("rack");
@@ -638,7 +668,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
-    var TAIL = 0.9;
     var PROGRESS_MS = 33;
     var DECAY = 0.22;
     var MIN_ATTACK = 0.002;
@@ -661,6 +690,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var startTime = 0;
     var cursor = 0;
     var scheduledUntil = 0;
+    var scheduleOrigin = 0;
+    var loop = false;
     var voices = [];
     var pumpTimer = null;
     var progressTimer = null;
@@ -800,10 +831,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
     }
 
-    function playVoice(note) {
+    function playVoice(note, origin) {
         var ctx = audio.ctx;
         var now = ctx.currentTime;
-        var at = startTime + note.t;
+        var at = (origin === undefined ? startTime : origin) + note.t;
         var peak = Math.max(
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
@@ -827,7 +858,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
-        osc.stop(end + RELEASE + 0.2);
+        osc.stop(end + RELEASE * 3);
         var voice = {
             osc: osc,
             gain: gain,
@@ -861,7 +892,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             );
         }
         releaseAt(voice.gain, end);
-        voice.osc.stop(end + RELEASE + 0.2);
+        voice.osc.stop(end + RELEASE * 3);
         voice.start = at;
         voice.end = end;
         voice.key = voiceKey(note, score.pxPerSecond);
@@ -920,19 +951,40 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         });
     }
 
+    function advanceLoop(now) {
+        var duration = score.durationSec;
+        if (duration <= 0) return;
+        while (now - startTime >= duration) startTime += duration;
+        if (scheduleOrigin < startTime) {
+            scheduleOrigin = startTime;
+            cursor = 0;
+        }
+    }
+
     function pump() {
         if (!playing || !score) return;
         var now = audio.ctx.currentTime;
+        var duration = score.durationSec;
+        if (loop) {
+            advanceLoop(now);
+        } else if (now - startTime >= duration) {
+            finish();
+            return;
+        }
         var horizon = now + LOOKAHEAD;
         scheduledUntil = horizon;
-        while (
-            cursor < score.voices.length &&
-            startTime + score.voices[cursor].t < horizon
-        ) {
-            playVoice(score.voices[cursor]);
-            cursor++;
+        while (true) {
+            while (
+                cursor < score.voices.length &&
+                scheduleOrigin + score.voices[cursor].t < horizon
+            ) {
+                playVoice(score.voices[cursor], scheduleOrigin);
+                cursor++;
+            }
+            if (!loop || duration <= 0 || scheduleOrigin + duration > horizon) break;
+            scheduleOrigin += duration;
+            cursor = 0;
         }
-        if (now - startTime >= score.durationSec + TAIL) finish();
     }
 
     function tickProgress() {
@@ -943,6 +995,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
         render();
         api.postMessage({ type: "progress", t: elapsed });
+    }
+
+    function rewindScheduling(now) {
+        scheduleOrigin = startTime;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(now - startTime);
     }
 
     function start() {
@@ -961,9 +1019,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             var from = elapsed > 0 && elapsed < score.durationSec ? elapsed : 0;
             var now = audio.ctx.currentTime;
             startTime = now + 0.12 - from;
-            scheduledUntil = now;
             elapsed = from;
-            cursor = firstVoiceAtOrAfter(now - startTime);
+            rewindScheduling(now);
             setPlaying(true);
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
@@ -992,7 +1049,31 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     }
 
     function finish() {
-        stop("ended");
+        if (!playing) return;
+        stopTimers();
+        fadePendingVoices(audio.ctx.currentTime);
+        setPlaying(false);
+        elapsed = 0;
+        render();
+        api.postMessage({ type: "ended" });
+    }
+
+    function fadePendingVoices(now) {
+        var live = voices.slice();
+        for (var i = 0; i < live.length; i++) {
+            if (live[i].start > now) fadeVoice(live[i], now);
+        }
+    }
+
+    function setLoop(next, announce) {
+        loop = Boolean(next);
+        loopBtn.setAttribute("aria-pressed", loop ? "true" : "false");
+        if (!loop && playing && audio) {
+            var now = audio.ctx.currentTime;
+            fadePendingVoices(now);
+            rewindScheduling(now);
+        }
+        if (announce) api.postMessage({ type: "loop", value: loop });
     }
 
     function setPlaying(next) {
@@ -1043,8 +1124,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var now = audio.ctx.currentTime;
         warpToSpeed(next.pxPerSecond, now);
         score = next;
-        scheduledUntil = now;
-        cursor = firstVoiceAtOrAfter(now - startTime);
+        rewindScheduling(now);
         reconcileVoices();
         render();
         describe();
@@ -1066,8 +1146,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var now = audio.ctx.currentTime;
         killVoices();
         startTime = now - target;
-        scheduledUntil = now;
-        cursor = firstVoiceAtOrAfter(target);
+        rewindScheduling(now);
         reconcileVoices();
         elapsed = target;
         render();
@@ -1116,6 +1195,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         api.postMessage({ type: "add-frame" });
     });
 
+    loopBtn.addEventListener("click", function () {
+        setLoop(!loop, true);
+    });
+
     playBtn.addEventListener("click", function () {
         if (playing) {
             stop("stopped");
@@ -1153,6 +1236,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (typeof values.speed === "number") {
             applyKnob(knobs.speed, values.speed, false, true);
         }
+        if (typeof values.loop === "boolean") setLoop(values.loop, false);
         if (audio) {
             audio.master.gain.value = Number(volumeInput.value);
             audio.wet.gain.value = Number(reverbInput.value);
@@ -1477,6 +1561,12 @@ function rectsOverlap(a, b) {
 
 const ELLIPSE_SEGMENTS = 48;
 const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
+function elementGain(el) {
+    const opacity = el.opacity;
+    if (typeof opacity !== "number" || !Number.isFinite(opacity))
+        return 1;
+    return Math.min(1, Math.max(0, opacity));
+}
 function elementBounds(el) {
     const { x, y, width, height } = el;
     if (x == null || y == null || width == null || height == null)
@@ -1533,7 +1623,7 @@ function shapeOutline(componentType, r) {
             return null;
     }
 }
-function elementInk(el) {
+function elementLines(el) {
     if (el.type === "frame")
         return [];
     const bounds = elementBounds(el);
@@ -1561,8 +1651,22 @@ function elementInk(el) {
         return [spin(outline)];
     return [spin(rectOutline(bounds))];
 }
+function elementInk(el) {
+    const gain = elementGain(el);
+    return elementLines(el)
+        .filter((line) => line.length >= 2)
+        .map((points) => ({ points, gain }));
+}
 function sceneInk(elements) {
-    return elements.flatMap(elementInk).filter((line) => line.length >= 2);
+    return elements.flatMap(elementInk);
+}
+function laserInk(strokes) {
+    return strokes
+        .filter((stroke) => stroke.length >= 2)
+        .map((stroke) => ({
+        points: stroke.map(([x, y]) => [x, y]),
+        gain: 1,
+    }));
 }
 
 const DEFAULT_SCORE_OPTIONS = {
@@ -1656,7 +1760,7 @@ function decimate(pitches) {
         return pitches;
     return evenPick(pitches, MAX_PITCH_POINTS);
 }
-function toVoice(groups, grid, stepSec) {
+function toVoice(groups, grid, stepSec, gain) {
     if (groups.length === 0)
         return null;
     const firstColumn = groups[0].column;
@@ -1681,20 +1785,23 @@ function toVoice(groups, grid, stepSec) {
         startSec,
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
-        velocity: MIN_VELOCITY +
-            (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS),
+        velocity: gain *
+            (MIN_VELOCITY +
+                (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS)),
         pitches: decimate(pitches),
     };
 }
-function buildVoices(lines, grid, stepSec, maxVoices) {
+function buildVoices(ink, grid, stepSec, maxVoices) {
     const sampleStep = Math.max(0.5, Math.min(grid.colWidth, grid.rowHeight) / 2);
     const strands = [];
-    for (const line of lines) {
-        for (const run of monotonicRuns(line)) {
+    for (const { points, gain } of ink) {
+        if (gain <= 0)
+            continue;
+        for (const run of monotonicRuns(points)) {
             let pending = [];
             const flush = () => {
                 if (pending.length > 0)
-                    strands.push(pending);
+                    strands.push({ cells: pending, gain });
                 pending = [];
             };
             walkRun(run, grid, sampleStep, (cell) => {
@@ -1709,7 +1816,7 @@ function buildVoices(lines, grid, stepSec, maxVoices) {
         }
     }
     const voices = strands
-        .map((strand) => toVoice(groupByColumn(strand), grid, stepSec))
+        .map((strand) => toVoice(groupByColumn(strand.cells), grid, stepSec, strand.gain))
         .filter((voice) => voice !== null);
     const byColumn = new Map();
     for (const voice of voices) {
@@ -1727,7 +1834,7 @@ function buildVoices(lines, grid, stepSec, maxVoices) {
     kept.sort((a, b) => a.startSec - b.startSec || a.pitches[0].row - b.pitches[0].row);
     return kept;
 }
-function buildScore(rect, lines, options = {}) {
+function buildScore(rect, ink, options = {}) {
     const { pxPerSecond, stepsPerSecond, maxVoices, scale } = {
         ...DEFAULT_SCORE_OPTIONS,
         ...options,
@@ -1741,7 +1848,7 @@ function buildScore(rect, lines, options = {}) {
     const stepSec = durationSec / columns;
     const normalized = { x: rect.x, y: rect.y, width, height };
     const grid = new Grid(normalized, columns, resolved);
-    const voices = buildVoices(lines, grid, stepSec, maxVoices);
+    const voices = buildVoices(ink, grid, stepSec, maxVoices);
     return {
         rect: normalized,
         scale: resolved,
@@ -1920,6 +2027,7 @@ const INK_PROPERTIES = [
     "height",
     "points",
     "rotation",
+    "opacity",
 ];
 const HIT_PAD = 8;
 const STAGE_TOLERANCE = 1;
@@ -2030,6 +2138,7 @@ const SETTINGS_KEY = "settings";
 const DEFAULT_SETTINGS = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
     scale: DEFAULT_SCALE_ID,
+    loop: false,
     attack: 0.02,
     volume: 0.7,
     glide: 0.3,
@@ -2059,7 +2168,12 @@ function sanitizeSettings(raw) {
     const speed = typeof raw.speed === "number" && Number.isFinite(raw.speed)
         ? clampSpeed(raw.speed)
         : DEFAULT_SETTINGS.speed;
-    return { ...sanitizeKnobs(raw, DEFAULT_SETTINGS), speed, scale };
+    return {
+        ...sanitizeKnobs(raw, DEFAULT_SETTINGS),
+        speed,
+        scale,
+        loop: raw.loop === true,
+    };
 }
 async function loadSettings(ctx) {
     try {
@@ -2100,6 +2214,7 @@ class SereneSession {
     _score = null;
     _rect = null;
     _lines = [];
+    _laser = [];
     _elementCount = 0;
     _settings = DEFAULT_SETTINGS;
     _pointer = null;
@@ -2197,6 +2312,13 @@ class SereneSession {
         }
         this._postScore(true);
     }
+    setLaser(strokes) {
+        this._laser = laserInk(strokes);
+        if (!this._rect)
+            return;
+        this._rebuild();
+        this._postScore(false, true);
+    }
     onSceneChanged(changed) {
         const rect = this._rect;
         if (!rect)
@@ -2281,6 +2403,9 @@ class SereneSession {
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "loop":
+                this._updateSettings({ loop: message.value === true });
+                return;
             case "knobs":
                 this._updateSettings(sanitizeKnobs(message.values, this._settings));
                 return;
@@ -2303,7 +2428,7 @@ class SereneSession {
     _rebuild() {
         if (!this._rect)
             return;
-        this._score = buildScore(this._rect, this._lines, {
+        this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
             pxPerSecond: this._settings.speed,
             scale: this._settings.scale,
         });
@@ -2759,6 +2884,10 @@ async function subscribeTransport(ctx, transport) {
         ...stamp(ctx),
     }));
     unwrap(await ctx.issueCommand({
+        type: "subscription:tool:laser",
+        ...stamp(ctx),
+    }));
+    unwrap(await ctx.issueCommand({
         type: "subscription:scene:click",
         ...stamp(ctx),
         req: { elementIds: transport.clickIds },
@@ -2835,6 +2964,10 @@ const onEvent = async (event) => {
             }
             transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
+            return;
+        }
+        case "subscription:tool:laser": {
+            session.setLaser(event.body.lasers);
             return;
         }
         case "subscription:camera:moved-rapid": {

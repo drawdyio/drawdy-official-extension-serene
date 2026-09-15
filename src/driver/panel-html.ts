@@ -142,6 +142,32 @@ body.playing .dial::before {
         box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 16px color-mix(in oklab, var(--drawdy-primary, #6366f1) 0%, transparent);
     }
 }
+.meter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.loop {
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--drawdy-border, #e5e5e5);
+    background: transparent;
+    color: var(--drawdy-muted-foreground, #888);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.loop:hover { border-color: var(--drawdy-primary, #6366f1); }
+.loop:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
+.loop[aria-pressed="true"] {
+    color: var(--drawdy-primary, #6366f1);
+    border-color: var(--drawdy-primary, #6366f1);
+    background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 12%, transparent);
+}
 .time {
     font-variant-numeric: tabular-nums;
     font-size: 12px;
@@ -307,7 +333,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-icon" d="M9 5.5v13l10-6.5z"/></svg>
             </button>
         </div>
-        <div class="time" id="time"><b>0.0</b> / 0.0s</div>
+        <div class="meter">
+            <div class="time" id="time"><b>0.0</b> / 0.0s</div>
+            <button id="loop" type="button" class="loop" aria-pressed="false" aria-label="Loop">&#8635; Loop</button>
+        </div>
     </div>
 
     <section class="card">
@@ -337,6 +366,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var playIcon = document.getElementById("play-icon");
     var ring = document.getElementById("ring");
     var timeEl = document.getElementById("time");
+    var loopBtn = document.getElementById("loop");
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
     var rack = document.getElementById("rack");
@@ -561,7 +591,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
-    var TAIL = 0.9;
     var PROGRESS_MS = 33;
     var DECAY = 0.22;
     var MIN_ATTACK = 0.002;
@@ -584,6 +613,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var startTime = 0;
     var cursor = 0;
     var scheduledUntil = 0;
+    var scheduleOrigin = 0;
+    var loop = false;
     var voices = [];
     var pumpTimer = null;
     var progressTimer = null;
@@ -723,10 +754,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
     }
 
-    function playVoice(note) {
+    function playVoice(note, origin) {
         var ctx = audio.ctx;
         var now = ctx.currentTime;
-        var at = startTime + note.t;
+        var at = (origin === undefined ? startTime : origin) + note.t;
         var peak = Math.max(
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
@@ -750,7 +781,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
-        osc.stop(end + RELEASE + 0.2);
+        osc.stop(end + RELEASE * 3);
         var voice = {
             osc: osc,
             gain: gain,
@@ -784,7 +815,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             );
         }
         releaseAt(voice.gain, end);
-        voice.osc.stop(end + RELEASE + 0.2);
+        voice.osc.stop(end + RELEASE * 3);
         voice.start = at;
         voice.end = end;
         voice.key = voiceKey(note, score.pxPerSecond);
@@ -843,19 +874,40 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         });
     }
 
+    function advanceLoop(now) {
+        var duration = score.durationSec;
+        if (duration <= 0) return;
+        while (now - startTime >= duration) startTime += duration;
+        if (scheduleOrigin < startTime) {
+            scheduleOrigin = startTime;
+            cursor = 0;
+        }
+    }
+
     function pump() {
         if (!playing || !score) return;
         var now = audio.ctx.currentTime;
+        var duration = score.durationSec;
+        if (loop) {
+            advanceLoop(now);
+        } else if (now - startTime >= duration) {
+            finish();
+            return;
+        }
         var horizon = now + LOOKAHEAD;
         scheduledUntil = horizon;
-        while (
-            cursor < score.voices.length &&
-            startTime + score.voices[cursor].t < horizon
-        ) {
-            playVoice(score.voices[cursor]);
-            cursor++;
+        while (true) {
+            while (
+                cursor < score.voices.length &&
+                scheduleOrigin + score.voices[cursor].t < horizon
+            ) {
+                playVoice(score.voices[cursor], scheduleOrigin);
+                cursor++;
+            }
+            if (!loop || duration <= 0 || scheduleOrigin + duration > horizon) break;
+            scheduleOrigin += duration;
+            cursor = 0;
         }
-        if (now - startTime >= score.durationSec + TAIL) finish();
     }
 
     function tickProgress() {
@@ -866,6 +918,12 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
         render();
         api.postMessage({ type: "progress", t: elapsed });
+    }
+
+    function rewindScheduling(now) {
+        scheduleOrigin = startTime;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(now - startTime);
     }
 
     function start() {
@@ -884,9 +942,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             var from = elapsed > 0 && elapsed < score.durationSec ? elapsed : 0;
             var now = audio.ctx.currentTime;
             startTime = now + 0.12 - from;
-            scheduledUntil = now;
             elapsed = from;
-            cursor = firstVoiceAtOrAfter(now - startTime);
+            rewindScheduling(now);
             setPlaying(true);
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
@@ -915,7 +972,31 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     }
 
     function finish() {
-        stop("ended");
+        if (!playing) return;
+        stopTimers();
+        fadePendingVoices(audio.ctx.currentTime);
+        setPlaying(false);
+        elapsed = 0;
+        render();
+        api.postMessage({ type: "ended" });
+    }
+
+    function fadePendingVoices(now) {
+        var live = voices.slice();
+        for (var i = 0; i < live.length; i++) {
+            if (live[i].start > now) fadeVoice(live[i], now);
+        }
+    }
+
+    function setLoop(next, announce) {
+        loop = Boolean(next);
+        loopBtn.setAttribute("aria-pressed", loop ? "true" : "false");
+        if (!loop && playing && audio) {
+            var now = audio.ctx.currentTime;
+            fadePendingVoices(now);
+            rewindScheduling(now);
+        }
+        if (announce) api.postMessage({ type: "loop", value: loop });
     }
 
     function setPlaying(next) {
@@ -966,8 +1047,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var now = audio.ctx.currentTime;
         warpToSpeed(next.pxPerSecond, now);
         score = next;
-        scheduledUntil = now;
-        cursor = firstVoiceAtOrAfter(now - startTime);
+        rewindScheduling(now);
         reconcileVoices();
         render();
         describe();
@@ -989,8 +1069,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var now = audio.ctx.currentTime;
         killVoices();
         startTime = now - target;
-        scheduledUntil = now;
-        cursor = firstVoiceAtOrAfter(target);
+        rewindScheduling(now);
         reconcileVoices();
         elapsed = target;
         render();
@@ -1039,6 +1118,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         api.postMessage({ type: "add-frame" });
     });
 
+    loopBtn.addEventListener("click", function () {
+        setLoop(!loop, true);
+    });
+
     playBtn.addEventListener("click", function () {
         if (playing) {
             stop("stopped");
@@ -1076,6 +1159,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (typeof values.speed === "number") {
             applyKnob(knobs.speed, values.speed, false, true);
         }
+        if (typeof values.loop === "boolean") setLoop(values.loop, false);
         if (audio) {
             audio.master.gain.value = Number(volumeInput.value);
             audio.wet.gain.value = Number(reverbInput.value);

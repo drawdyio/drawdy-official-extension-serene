@@ -14,11 +14,13 @@ export type KnobSettings = {
 export type SereneSettings = KnobSettings & {
     speed: number;
     scale: ScaleId;
+    loop: boolean;
 };
 
 export const DEFAULT_SETTINGS: SereneSettings = {
     speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
     scale: DEFAULT_SCALE_ID,
+    loop: false,
     attack: 0.02,
     volume: 0.7,
     glide: 0.3,
@@ -55,7 +57,12 @@ export function sanitizeSettings(raw: Record<string, unknown>): SereneSettings {
         typeof raw.speed === "number" && Number.isFinite(raw.speed)
             ? clampSpeed(raw.speed)
             : DEFAULT_SETTINGS.speed;
-    return { ...sanitizeKnobs(raw, DEFAULT_SETTINGS), speed, scale };
+    return {
+        ...sanitizeKnobs(raw, DEFAULT_SETTINGS),
+        speed,
+        scale,
+        loop: raw.loop === true,
+    };
 }
 
 export async function loadSettings(ctx: Ctx): Promise<SereneSettings> {

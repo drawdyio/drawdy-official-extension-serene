@@ -5,6 +5,14 @@ const ELLIPSE_SEGMENTS = 48;
 
 const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
 
+export type Ink = { points: Polyline; gain: number };
+
+export function elementGain(el: SubscribedDrawdyElement): number {
+    const opacity = el.opacity;
+    if (typeof opacity !== "number" || !Number.isFinite(opacity)) return 1;
+    return Math.min(1, Math.max(0, opacity));
+}
+
 export function elementBounds(el: SubscribedDrawdyElement): Rect | null {
     const { x, y, width, height } = el;
     if (x == null || y == null || width == null || height == null) return null;
@@ -67,7 +75,7 @@ function shapeOutline(
     }
 }
 
-export function elementInk(el: SubscribedDrawdyElement): Polyline[] {
+function elementLines(el: SubscribedDrawdyElement): Polyline[] {
     if (el.type === "frame") return [];
 
     const bounds = elementBounds(el);
@@ -98,6 +106,22 @@ export function elementInk(el: SubscribedDrawdyElement): Polyline[] {
     return [spin(rectOutline(bounds))];
 }
 
-export function sceneInk(elements: SubscribedDrawdyElement[]): Polyline[] {
-    return elements.flatMap(elementInk).filter((line) => line.length >= 2);
+export function elementInk(el: SubscribedDrawdyElement): Ink[] {
+    const gain = elementGain(el);
+    return elementLines(el)
+        .filter((line) => line.length >= 2)
+        .map((points) => ({ points, gain }));
+}
+
+export function sceneInk(elements: SubscribedDrawdyElement[]): Ink[] {
+    return elements.flatMap(elementInk);
+}
+
+export function laserInk(strokes: readonly (readonly [number, number][])[]): Ink[] {
+    return strokes
+        .filter((stroke) => stroke.length >= 2)
+        .map((stroke) => ({
+            points: stroke.map(([x, y]) => [x, y] as Point),
+            gain: 1,
+        }));
 }

@@ -16,6 +16,7 @@ export const INK_PROPERTIES: SubscribeableKey[] = [
     "height",
     "points",
     "rotation",
+    "opacity",
 ];
 
 const HIT_PAD = 8;

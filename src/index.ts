@@ -119,6 +119,12 @@ async function subscribeTransport(
     );
     unwrap(
         await ctx.issueCommand({
+            type: "subscription:tool:laser",
+            ...stamp(ctx),
+        })
+    );
+    unwrap(
+        await ctx.issueCommand({
             type: "subscription:scene:click",
             ...stamp(ctx),
             req: { elementIds: transport.clickIds },
@@ -207,6 +213,10 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
             }
             transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
+            return;
+        }
+        case "subscription:tool:laser": {
+            session.setLaser(event.body.lasers);
             return;
         }
         case "subscription:camera:moved-rapid": {
