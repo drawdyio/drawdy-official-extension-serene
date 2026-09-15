@@ -229,7 +229,7 @@ select:hover { border-color: var(--drawdy-primary, #6366f1); }
 select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .rack {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 4px;
     padding: 14px 4px 12px;
 }
@@ -442,15 +442,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             format: asPercent,
         },
         {
-            id: "glide",
-            label: "Glide",
-            min: 0,
-            max: 1,
-            step: 0.01,
-            value: 0.3,
-            format: asPercent,
-        },
-        {
             id: "reverb",
             label: "Reverb",
             min: 0,
@@ -616,7 +607,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var speedInput = knobs.speed.input;
     var attackInput = knobs.attack.input;
     var volumeInput = knobs.volume.input;
-    var glideInput = knobs.glide.input;
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
@@ -625,8 +615,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var MIN_ATTACK = 0.002;
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
+    var PERCUSSIVE_TAU = 0.32;
     var PEAK_GAIN = 0.2;
-    var MAX_GLIDE = 0.3;
     var LIMIT_THRESHOLD = -3;
     var LIMIT_RATIO = 20;
     var LIMIT_ATTACK = 0.002;
@@ -737,8 +727,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         return total / pitches.length;
     }
 
-    function schedulePitches(osc, at, pitches, resumeAt) {
-        var glide = Number(glideInput.value);
+    function schedulePitches(osc, at, pitches, resumeAt, allowGlide) {
         var prevTime = at;
         var prevHz = pitches[0].hz;
         if (resumeAt !== undefined) {
@@ -750,7 +739,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             var when = at + pitches[i].t;
             if (when <= prevTime) continue;
             var span = when - prevTime;
-            var slide = Math.min(glide * span, MAX_GLIDE);
+            var slide = allowGlide ? span : 0;
             if (slide > 0.004) {
                 if (slide < span) {
                     osc.frequency.setValueAtTime(prevHz, when - slide);
@@ -783,6 +772,27 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
     }
 
+    function scheduleEnvelope(gain, at, peak, sustain, attack, end) {
+        var param = gain.gain;
+        var attackEnd = at + attack;
+        var decayEnd = attackEnd + DECAY;
+        var releaseStart = Math.max(end, attackEnd);
+        param.setValueAtTime(0, at);
+        param.linearRampToValueAtTime(peak, attackEnd);
+        if (releaseStart >= decayEnd) {
+            param.exponentialRampToValueAtTime(sustain, decayEnd);
+            if (releaseStart > decayEnd) param.setValueAtTime(sustain, releaseStart);
+        } else {
+            var frac = (releaseStart - attackEnd) / DECAY;
+            var level = peak * Math.pow(sustain / peak, frac);
+            param.exponentialRampToValueAtTime(Math.max(0.0001, level), releaseStart);
+        }
+        var percussive = end - at < attack + DECAY;
+        var tau = percussive ? PERCUSSIVE_TAU : RELEASE / 3;
+        param.setTargetAtTime(0.0001, releaseStart, tau);
+        return releaseStart + tau * 6;
+    }
+
     function playVoice(note, origin) {
         var ctx = audio.ctx;
         var now = ctx.currentTime;
@@ -796,21 +806,21 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
         osc.type = "sine";
-        schedulePitches(osc, at, note.pitches);
+        schedulePitches(osc, at, note.pitches, undefined, note.g);
         var gain = ctx.createGain();
+        var stopAt;
         if (at >= now) {
-            gain.gain.setValueAtTime(0, at);
-            gain.gain.linearRampToValueAtTime(peak, at + attack);
-            gain.gain.exponentialRampToValueAtTime(sustain, at + attack + DECAY);
+            stopAt = scheduleEnvelope(gain, at, peak, sustain, attack, end);
         } else {
             gain.gain.setValueAtTime(sustain, now);
+            releaseAt(gain, end);
+            stopAt = end + RELEASE * 3;
         }
-        releaseAt(gain, end);
         osc.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
-        osc.stop(end + RELEASE * 3);
+        osc.stop(stopAt);
         var voice = {
             osc: osc,
             gain: gain,
@@ -833,7 +843,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var at = startTime + note.t;
         var end = Math.max(now, at + holdFor(note));
         voice.osc.frequency.cancelScheduledValues(now);
-        schedulePitches(voice.osc, at, note.pitches, now);
+        schedulePitches(voice.osc, at, note.pitches, now, note.g);
         var level = Math.max(0.0001, voice.gain.gain.value);
         voice.gain.gain.cancelScheduledValues(now);
         voice.gain.gain.setValueAtTime(level, now);
@@ -1169,18 +1179,17 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             values: {
                 attack: Number(attackInput.value),
                 volume: Number(volumeInput.value),
-                glide: Number(glideInput.value),
                 reverb: Number(reverbInput.value),
             },
         });
     }
 
-    [attackInput, volumeInput, glideInput, reverbInput].forEach(function (input) {
+    [attackInput, volumeInput, reverbInput].forEach(function (input) {
         input.addEventListener("change", postKnobs);
     });
 
     function applySettings(values) {
-        ["attack", "volume", "glide", "reverb"].forEach(function (key) {
+        ["attack", "volume", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") {
                 applyKnob(knobs[key], values[key], false, true);
             }

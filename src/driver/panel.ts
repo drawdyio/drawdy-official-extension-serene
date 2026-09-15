@@ -20,6 +20,7 @@ export type SerializedVoice = {
     t: number;
     d: number;
     v: number;
+    g: boolean;
     pitches: SerializedPitch[];
 };
 
@@ -76,6 +77,7 @@ const serializeVoice =
         t: voice.startSec,
         d: voice.durationSec,
         v: voice.velocity,
+        g: voice.glide,
         pitches: voice.pitches.map((pitch) => ({
             t: pitch.t,
             hz: rowToHz(score.scale, score.range, pitch.row),

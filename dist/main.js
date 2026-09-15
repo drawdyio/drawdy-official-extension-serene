@@ -326,7 +326,7 @@ select:hover { border-color: var(--drawdy-primary, #6366f1); }
 select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .rack {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 4px;
     padding: 14px 4px 12px;
 }
@@ -539,15 +539,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             format: asPercent,
         },
         {
-            id: "glide",
-            label: "Glide",
-            min: 0,
-            max: 1,
-            step: 0.01,
-            value: 0.3,
-            format: asPercent,
-        },
-        {
             id: "reverb",
             label: "Reverb",
             min: 0,
@@ -713,7 +704,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var speedInput = knobs.speed.input;
     var attackInput = knobs.attack.input;
     var volumeInput = knobs.volume.input;
-    var glideInput = knobs.glide.input;
     var reverbInput = knobs.reverb.input;
 
     var LOOKAHEAD = 0.25;
@@ -722,8 +712,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var MIN_ATTACK = 0.002;
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
+    var PERCUSSIVE_TAU = 0.32;
     var PEAK_GAIN = 0.2;
-    var MAX_GLIDE = 0.3;
     var LIMIT_THRESHOLD = -3;
     var LIMIT_RATIO = 20;
     var LIMIT_ATTACK = 0.002;
@@ -834,8 +824,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         return total / pitches.length;
     }
 
-    function schedulePitches(osc, at, pitches, resumeAt) {
-        var glide = Number(glideInput.value);
+    function schedulePitches(osc, at, pitches, resumeAt, allowGlide) {
         var prevTime = at;
         var prevHz = pitches[0].hz;
         if (resumeAt !== undefined) {
@@ -847,7 +836,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             var when = at + pitches[i].t;
             if (when <= prevTime) continue;
             var span = when - prevTime;
-            var slide = Math.min(glide * span, MAX_GLIDE);
+            var slide = allowGlide ? span : 0;
             if (slide > 0.004) {
                 if (slide < span) {
                     osc.frequency.setValueAtTime(prevHz, when - slide);
@@ -880,6 +869,27 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
     }
 
+    function scheduleEnvelope(gain, at, peak, sustain, attack, end) {
+        var param = gain.gain;
+        var attackEnd = at + attack;
+        var decayEnd = attackEnd + DECAY;
+        var releaseStart = Math.max(end, attackEnd);
+        param.setValueAtTime(0, at);
+        param.linearRampToValueAtTime(peak, attackEnd);
+        if (releaseStart >= decayEnd) {
+            param.exponentialRampToValueAtTime(sustain, decayEnd);
+            if (releaseStart > decayEnd) param.setValueAtTime(sustain, releaseStart);
+        } else {
+            var frac = (releaseStart - attackEnd) / DECAY;
+            var level = peak * Math.pow(sustain / peak, frac);
+            param.exponentialRampToValueAtTime(Math.max(0.0001, level), releaseStart);
+        }
+        var percussive = end - at < attack + DECAY;
+        var tau = percussive ? PERCUSSIVE_TAU : RELEASE / 3;
+        param.setTargetAtTime(0.0001, releaseStart, tau);
+        return releaseStart + tau * 6;
+    }
+
     function playVoice(note, origin) {
         var ctx = audio.ctx;
         var now = ctx.currentTime;
@@ -893,21 +903,21 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
         osc.type = "sine";
-        schedulePitches(osc, at, note.pitches);
+        schedulePitches(osc, at, note.pitches, undefined, note.g);
         var gain = ctx.createGain();
+        var stopAt;
         if (at >= now) {
-            gain.gain.setValueAtTime(0, at);
-            gain.gain.linearRampToValueAtTime(peak, at + attack);
-            gain.gain.exponentialRampToValueAtTime(sustain, at + attack + DECAY);
+            stopAt = scheduleEnvelope(gain, at, peak, sustain, attack, end);
         } else {
             gain.gain.setValueAtTime(sustain, now);
+            releaseAt(gain, end);
+            stopAt = end + RELEASE * 3;
         }
-        releaseAt(gain, end);
         osc.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
         osc.start(Math.max(at, now));
-        osc.stop(end + RELEASE * 3);
+        osc.stop(stopAt);
         var voice = {
             osc: osc,
             gain: gain,
@@ -930,7 +940,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var at = startTime + note.t;
         var end = Math.max(now, at + holdFor(note));
         voice.osc.frequency.cancelScheduledValues(now);
-        schedulePitches(voice.osc, at, note.pitches, now);
+        schedulePitches(voice.osc, at, note.pitches, now, note.g);
         var level = Math.max(0.0001, voice.gain.gain.value);
         voice.gain.gain.cancelScheduledValues(now);
         voice.gain.gain.setValueAtTime(level, now);
@@ -1266,18 +1276,17 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             values: {
                 attack: Number(attackInput.value),
                 volume: Number(volumeInput.value),
-                glide: Number(glideInput.value),
                 reverb: Number(reverbInput.value),
             },
         });
     }
 
-    [attackInput, volumeInput, glideInput, reverbInput].forEach(function (input) {
+    [attackInput, volumeInput, reverbInput].forEach(function (input) {
         input.addEventListener("change", postKnobs);
     });
 
     function applySettings(values) {
-        ["attack", "volume", "glide", "reverb"].forEach(function (key) {
+        ["attack", "volume", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") {
                 applyKnob(knobs[key], values[key], false, true);
             }
@@ -1394,6 +1403,7 @@ const serializeVoice = (score) => (voice) => ({
     t: voice.startSec,
     d: voice.durationSec,
     v: voice.velocity,
+    g: voice.glide,
     pitches: voice.pitches.map((pitch) => ({
         t: pitch.t,
         hz: rowToHz(score.scale, score.range, pitch.row),
@@ -1630,6 +1640,10 @@ function rectsOverlap(a, b) {
 
 const ELLIPSE_SEGMENTS = 48;
 const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
+function elementGlides(el) {
+    return (el.type === "freedraw" ||
+        STROKE_COMPONENT_TYPES.has(el.componentType ?? ""));
+}
 function elementGain(el) {
     const opacity = el.opacity;
     if (typeof opacity !== "number" || !Number.isFinite(opacity))
@@ -1722,9 +1736,10 @@ function elementLines(el) {
 }
 function elementInk(el) {
     const gain = elementGain(el);
+    const glide = elementGlides(el);
     return elementLines(el)
         .filter((line) => line.length >= 2)
-        .map((points) => ({ points, gain }));
+        .map((points) => ({ points, gain, glide }));
 }
 function sceneInk(elements) {
     return elements.flatMap(elementInk);
@@ -1735,6 +1750,7 @@ function laserInk(strokes) {
         .map((stroke) => ({
         points: stroke.map(([x, y]) => [x, y]),
         gain: 1,
+        glide: true,
     }));
 }
 
@@ -1833,7 +1849,57 @@ function decimate(pitches) {
         return pitches;
     return evenPick(pitches, MAX_PITCH_POINTS);
 }
-function toVoice(groups, grid, stepSec, gain) {
+const GLISSANDO_MIN_ROWS = 3;
+function dominantRow(group, grid) {
+    let best = group.rows[0];
+    let bestHits = -1;
+    for (const row of group.rows) {
+        const hits = grid.hitsAt({ column: group.column, row });
+        if (hits > bestHits) {
+            bestHits = hits;
+            best = row;
+        }
+    }
+    return best;
+}
+function snapShallowColumns(groups, grid) {
+    return groups.map((group) => group.rows.length >= GLISSANDO_MIN_ROWS
+        ? group
+        : { column: group.column, rows: [dominantRow(group, grid)] });
+}
+function runBounds(run) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of run) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+function splitIntoNotes(voice, stepSec) {
+    if (voice.pitches.length <= 1)
+        return [voice];
+    return voice.pitches.map((pitch, index) => {
+        const next = voice.pitches[index + 1];
+        const startSec = voice.startSec + pitch.t;
+        const endSec = next
+            ? voice.startSec + next.t
+            : voice.startSec + voice.durationSec;
+        return {
+            startSec,
+            durationSec: Math.max(stepSec / 4, endSec - startSec),
+            column: Math.floor(startSec / stepSec + 1e-6),
+            velocity: voice.velocity,
+            glide: false,
+            pitches: [{ t: 0, row: pitch.row }],
+        };
+    });
+}
+function toVoice(groups, grid, stepSec, gain, glide) {
     if (groups.length === 0)
         return null;
     const firstColumn = groups[0].column;
@@ -1858,6 +1924,7 @@ function toVoice(groups, grid, stepSec, gain) {
         startSec,
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
+        glide,
         velocity: gain *
             (MIN_VELOCITY +
                 (1 - MIN_VELOCITY) * Math.min(1, peak / FULL_VELOCITY_HITS)),
@@ -1867,14 +1934,24 @@ function toVoice(groups, grid, stepSec, gain) {
 function buildVoices(ink, grid, stepSec, maxVoices) {
     const sampleStep = Math.max(0.5, Math.min(grid.colWidth, grid.rowHeight) / 2);
     const strands = [];
-    for (const { points, gain } of ink) {
+    for (const { points, gain, glide } of ink) {
         if (gain <= 0)
             continue;
         for (const run of monotonicRuns(points)) {
+            const bounds = runBounds(run);
+            if (bounds.width < grid.colWidth && bounds.height < grid.rowHeight) {
+                const dot = grid.locate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+                if (dot) {
+                    grid.hit(dot);
+                    strands.push({ cells: [dot], gain, glide });
+                }
+                continue;
+            }
             let pending = [];
             const flush = () => {
-                if (pending.length > 0)
-                    strands.push({ cells: pending, gain });
+                if (pending.length > 0) {
+                    strands.push({ cells: pending, gain, glide });
+                }
                 pending = [];
             };
             walkRun(run, grid, sampleStep, (cell) => {
@@ -1889,8 +1966,9 @@ function buildVoices(ink, grid, stepSec, maxVoices) {
         }
     }
     const voices = strands
-        .map((strand) => toVoice(groupByColumn(strand.cells), grid, stepSec, strand.gain))
-        .filter((voice) => voice !== null);
+        .map((strand) => toVoice(snapShallowColumns(groupByColumn(strand.cells), grid), grid, stepSec, strand.gain, strand.glide))
+        .filter((voice) => voice !== null)
+        .flatMap((voice) => voice.glide ? [voice] : splitIntoNotes(voice, stepSec));
     const byColumn = new Map();
     for (const voice of voices) {
         const bucket = byColumn.get(voice.column);
@@ -2215,13 +2293,11 @@ const DEFAULT_SETTINGS = {
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
     volume: 0.7,
-    glide: 0.3,
     reverb: 0.38,
 };
 const KNOB_RANGES = {
     attack: [0, 0.3],
     volume: [0, 1],
-    glide: [0, 1],
     reverb: [0, 1],
 };
 function clampNumber(value, min, max, fallback) {

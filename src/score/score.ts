@@ -19,6 +19,7 @@ export type Voice = {
     durationSec: number;
     column: number;
     velocity: number;
+    glide: boolean;
     pitches: PitchPoint[];
 };
 
@@ -172,11 +173,68 @@ function decimate(pitches: PitchPoint[]): PitchPoint[] {
     return evenPick(pitches, MAX_PITCH_POINTS);
 }
 
+const GLISSANDO_MIN_ROWS = 3;
+
+function dominantRow(group: ColumnGroup, grid: Grid): number {
+    let best = group.rows[0];
+    let bestHits = -1;
+    for (const row of group.rows) {
+        const hits = grid.hitsAt({ column: group.column, row });
+        if (hits > bestHits) {
+            bestHits = hits;
+            best = row;
+        }
+    }
+    return best;
+}
+
+function snapShallowColumns(groups: ColumnGroup[], grid: Grid): ColumnGroup[] {
+    return groups.map((group) =>
+        group.rows.length >= GLISSANDO_MIN_ROWS
+            ? group
+            : { column: group.column, rows: [dominantRow(group, grid)] }
+    );
+}
+
+function runBounds(run: Polyline): Rect {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of run) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+function splitIntoNotes(voice: Voice, stepSec: number): Voice[] {
+    if (voice.pitches.length <= 1) return [voice];
+    return voice.pitches.map((pitch, index) => {
+        const next = voice.pitches[index + 1];
+        const startSec = voice.startSec + pitch.t;
+        const endSec = next
+            ? voice.startSec + next.t
+            : voice.startSec + voice.durationSec;
+        return {
+            startSec,
+            durationSec: Math.max(stepSec / 4, endSec - startSec),
+            column: Math.floor(startSec / stepSec + 1e-6),
+            velocity: voice.velocity,
+            glide: false,
+            pitches: [{ t: 0, row: pitch.row }],
+        };
+    });
+}
+
 function toVoice(
     groups: ColumnGroup[],
     grid: Grid,
     stepSec: number,
-    gain: number
+    gain: number,
+    glide: boolean
 ): Voice | null {
     if (groups.length === 0) return null;
     const firstColumn = groups[0].column;
@@ -201,6 +259,7 @@ function toVoice(
         startSec,
         durationSec: (lastColumn + 1) * stepSec - startSec,
         column: firstColumn,
+        glide,
         velocity:
             gain *
             (MIN_VELOCITY +
@@ -209,7 +268,7 @@ function toVoice(
     };
 }
 
-type Strand = { cells: Cell[]; gain: number };
+type Strand = { cells: Cell[]; gain: number; glide: boolean };
 
 function buildVoices(
     ink: Ink[],
@@ -220,12 +279,26 @@ function buildVoices(
     const sampleStep = Math.max(0.5, Math.min(grid.colWidth, grid.rowHeight) / 2);
     const strands: Strand[] = [];
 
-    for (const { points, gain } of ink) {
+    for (const { points, gain, glide } of ink) {
         if (gain <= 0) continue;
         for (const run of monotonicRuns(points)) {
+            const bounds = runBounds(run);
+            if (bounds.width < grid.colWidth && bounds.height < grid.rowHeight) {
+                const dot = grid.locate(
+                    bounds.x + bounds.width / 2,
+                    bounds.y + bounds.height / 2
+                );
+                if (dot) {
+                    grid.hit(dot);
+                    strands.push({ cells: [dot], gain, glide });
+                }
+                continue;
+            }
             let pending: Cell[] = [];
             const flush = (): void => {
-                if (pending.length > 0) strands.push({ cells: pending, gain });
+                if (pending.length > 0) {
+                    strands.push({ cells: pending, gain, glide });
+                }
                 pending = [];
             };
             walkRun(run, grid, sampleStep, (cell) => {
@@ -242,9 +315,18 @@ function buildVoices(
 
     const voices = strands
         .map((strand) =>
-            toVoice(groupByColumn(strand.cells), grid, stepSec, strand.gain)
+            toVoice(
+                snapShallowColumns(groupByColumn(strand.cells), grid),
+                grid,
+                stepSec,
+                strand.gain,
+                strand.glide
+            )
         )
-        .filter((voice): voice is Voice => voice !== null);
+        .filter((voice): voice is Voice => voice !== null)
+        .flatMap((voice) =>
+            voice.glide ? [voice] : splitIntoNotes(voice, stepSec)
+        );
 
     const byColumn = new Map<number, Voice[]>();
     for (const voice of voices) {

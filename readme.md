@@ -69,22 +69,30 @@ the thing it frames. A container is only played when it is the only thing there.
 
 ## Legato
 
-Connected ink is one voice. Each polyline is split into runs that are monotonic
-in x, and each run becomes a single oscillator that is struck once and then
-*slides* — the pitch moves as the playhead climbs or falls along the stroke,
-without a new attack. A horizontal stroke holds one note. A diagonal glides
+Glide belongs to strokes. A freehand stroke, a line, an arrow or a laser trail
+is one voice: it is split into runs that are monotonic in x, and each run
+becomes a single oscillator that is struck once and then *slides* — the pitch
+moves as the playhead climbs or falls along that stroke's own geometry, without
+a new attack. Glide never crosses from one element to another; separate strokes
+are separate voices. Everything else — rectangles, circles, diamonds, text and
+image bounds — triggers discrete notes instead: every change of pitch along the
+outline is a fresh strike, so a circle rings as a run of plucked notes and a
+vertical edge as a quick arpeggio. A horizontal stroke holds one note. A diagonal glides
 from row to row. A circle is two arcs, one sweeping down to the bottom and back,
 one up to the top and back. A vertical stroke covers one column and becomes a
-fast glissando through every row it crosses.
+fast glissando through every row it crosses, but only when it spans three or
+more rows in that column; shallower movement snaps to the single degree the
+stroke mostly sits on, so a diagonal steps once per column and a dot is one
+note. A dot is struck like a mallet: a short tap that rings down on its own
+while the reverb carries it.
 
 Separate strokes still stack into chords, and a stroke that doubles back on
 itself starts a new voice at the turn, because the playhead has already passed
 that x.
 
-Pitch breakpoints land on the column grid, so every step is a scale degree.
-The **Glide** control sets how much of the gap between two breakpoints is spent
-sliding: at 0 the voice steps cleanly from degree to degree, at 1 it is a
-continuous portamento that passes through the pitches in between.
+Pitch breakpoints land on the column grid, so every step is a scale degree, and
+a stroke slides continuously from one breakpoint to the next — a portamento
+that passes through the pitches in between, exactly following the ink.
 
 The region is rasterized onto a grid of the scale's pitch rows by
 `durationSec * stepsPerSecond` columns, which drives note timing and the voice
@@ -95,8 +103,7 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 
 The extension rail opens a transport panel with play/stop, a speed slider
 (px per second — this is what sets the duration), attack (0 to 300 ms, default
-20 ms — how long each voice takes to reach full level), volume, glide and
-reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
+20 ms — how long each voice takes to reach full level), volume and reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
 any tails, and
 an **Add Serene frame** button with a count of the frames on the board. Every
 knob and the scale are remembered across sessions in the driver's key/value

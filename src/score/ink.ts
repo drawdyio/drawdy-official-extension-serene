@@ -5,7 +5,14 @@ const ELLIPSE_SEGMENTS = 48;
 
 const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
 
-export type Ink = { points: Polyline; gain: number };
+export type Ink = { points: Polyline; gain: number; glide: boolean };
+
+export function elementGlides(el: SubscribedDrawdyElement): boolean {
+    return (
+        el.type === "freedraw" ||
+        STROKE_COMPONENT_TYPES.has(el.componentType ?? "")
+    );
+}
 
 export function elementGain(el: SubscribedDrawdyElement): number {
     const opacity = el.opacity;
@@ -108,9 +115,10 @@ function elementLines(el: SubscribedDrawdyElement): Polyline[] {
 
 export function elementInk(el: SubscribedDrawdyElement): Ink[] {
     const gain = elementGain(el);
+    const glide = elementGlides(el);
     return elementLines(el)
         .filter((line) => line.length >= 2)
-        .map((points) => ({ points, gain }));
+        .map((points) => ({ points, gain, glide }));
 }
 
 export function sceneInk(elements: SubscribedDrawdyElement[]): Ink[] {
@@ -123,5 +131,6 @@ export function laserInk(strokes: readonly (readonly [number, number][])[]): Ink
         .map((stroke) => ({
             points: stroke.map(([x, y]) => [x, y] as Point),
             gain: 1,
+            glide: true,
         }));
 }

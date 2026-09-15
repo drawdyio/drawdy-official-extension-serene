@@ -13,7 +13,6 @@ const SETTINGS_KEY = "settings";
 export type KnobSettings = {
     attack: number;
     volume: number;
-    glide: number;
     reverb: number;
 };
 
@@ -33,14 +32,12 @@ export const DEFAULT_SETTINGS: SereneSettings = {
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
     volume: 0.7,
-    glide: 0.3,
     reverb: 0.38,
 };
 
 const KNOB_RANGES: Record<keyof KnobSettings, [number, number]> = {
     attack: [0, 0.3],
     volume: [0, 1],
-    glide: [0, 1],
     reverb: [0, 1],
 };
 
