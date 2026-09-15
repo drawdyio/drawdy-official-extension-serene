@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@drawdy/driver-protocol':
-        specifier: latest
-        version: 0.1.6
+        specifier: 0.1.9
+        version: 0.1.9
       '@rollup/plugin-typescript':
         specifier: ^12.1.2
         version: 12.3.0(rollup@4.63.2)(tslib@2.8.1)(typescript@5.9.3)
@@ -35,8 +35,8 @@ importers:
 
 packages:
 
-  '@drawdy/driver-protocol@0.1.6':
-    resolution: {integrity: sha512-fEisu4bPOxQWeHifbH/n3IEDJRPRHS3U/7rjybV/b2stBYErtYfEKLNf6YSFObERDIdv3Rru4ucGydixRNoQ0w==}
+  '@drawdy/driver-protocol@0.1.9':
+    resolution: {integrity: sha512-D9GC33pzf473b0LMsFA65j8EHJ5geV8MWWeCWP3WM9ZIZcl2BGz0Q7eTmrTTXUPRaV04Pdadik/+qIsvp2BlmA==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -528,7 +528,7 @@ packages:
 
 snapshots:
 
-  '@drawdy/driver-protocol@0.1.6': {}
+  '@drawdy/driver-protocol@0.1.9': {}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true

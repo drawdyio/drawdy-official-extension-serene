@@ -5,6 +5,7 @@ import {
 import { Rect, combineRects, rectArea, rectContainsPoint } from "../score/geometry";
 import { elementBounds } from "../score/ink";
 import { Ctx, stamp, unwrap } from "./context";
+import { FRAME_PROPERTIES, isSereneFrame } from "./frames";
 
 export const INK_PROPERTIES: SubscribeableKey[] = [
     "type",
@@ -17,20 +18,13 @@ export const INK_PROPERTIES: SubscribeableKey[] = [
     "rotation",
 ];
 
-const BOUNDS_PROPERTIES: SubscribeableKey[] = [
-    "type",
-    "x",
-    "y",
-    "width",
-    "height",
-];
-
 const HIT_PAD = 8;
 
 const STAGE_TOLERANCE = 1;
 
 export type Target = {
     rect: Rect;
+    frameIds: string[];
     elements: SubscribedDrawdyElement[];
 };
 
@@ -100,53 +94,42 @@ function boundsUnion(elements: SubscribedDrawdyElement[]): Rect | null {
     return combineRects(rects);
 }
 
-async function boardRect(ctx: Ctx): Promise<Rect | null> {
-    const { drawdyElements } = unwrap(
-        await ctx.issueCommand({
-            type: "command:scene:get-drawdy-elements",
-            ...stamp(ctx),
-            req: { properties: BOUNDS_PROPERTIES },
-        })
-    );
-    return boundsUnion(drawdyElements);
-}
-
-function pickHit(
-    hits: SubscribedDrawdyElement[],
+function smallestFrameUnder(
+    frames: SubscribedDrawdyElement[],
     pointer: { x: number; y: number }
 ): SubscribedDrawdyElement | null {
-    const enclosingFrame = hits.find((el) => {
-        if (el.type !== "frame") return false;
-        const bounds = elementBounds(el);
-        return bounds ? rectContainsPoint(bounds, pointer.x, pointer.y) : false;
-    });
-    if (enclosingFrame) return enclosingFrame;
-
     let smallest: SubscribedDrawdyElement | null = null;
     let smallestArea = Infinity;
-    for (const el of hits) {
-        const bounds = elementBounds(el);
-        if (!bounds) continue;
+    for (const frame of frames) {
+        const bounds = elementBounds(frame);
+        if (!bounds || !rectContainsPoint(bounds, pointer.x, pointer.y)) continue;
         const area = rectArea(bounds);
         if (area < smallestArea) {
             smallestArea = area;
-            smallest = el;
+            smallest = frame;
         }
     }
     return smallest;
 }
 
-async function seedIds(
+async function seedFrameIds(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null
+    pointer: { x: number; y: number } | null,
+    explicit: string[]
 ): Promise<string[]> {
+    if (explicit.length > 0) return explicit;
+
     const { drawdyElementIds } = unwrap(
         await ctx.issueCommand({
             type: "command:scene:get-current-selected-drawdy-elements",
             ...stamp(ctx),
         })
     );
-    if (drawdyElementIds.length > 0) return drawdyElementIds;
+    if (drawdyElementIds.length > 0) {
+        const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
+        const frames = selected.filter(isSereneFrame).map((el) => el.id);
+        if (frames.length > 0) return frames;
+    }
     if (!pointer) return [];
 
     const hits = await elementsInRect(
@@ -157,28 +140,24 @@ async function seedIds(
             width: HIT_PAD * 2,
             height: HIT_PAD * 2,
         },
-        BOUNDS_PROPERTIES
+        FRAME_PROPERTIES
     );
-    const hit = pickHit(hits, pointer);
-    return hit ? [hit.id] : [];
+    const frame = smallestFrameUnder(hits.filter(isSereneFrame), pointer);
+    return frame ? [frame.id] : [];
 }
 
 type Region = { rect: Rect; stageIds: string[] };
 
 async function resolveRegion(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null
+    pointer: { x: number; y: number } | null,
+    explicit: string[]
 ): Promise<Region | null> {
-    const stageIds = await seedIds(ctx, pointer);
+    const stageIds = await seedFrameIds(ctx, pointer, explicit);
+    if (stageIds.length === 0) return null;
 
-    let rect: Rect | null;
-    if (stageIds.length > 0) {
-        const seeds = await elementsByIds(ctx, stageIds, BOUNDS_PROPERTIES);
-        const frames = seeds.filter((el) => el.type === "frame");
-        rect = boundsUnion(frames.length > 0 ? frames : seeds);
-    } else {
-        rect = await boardRect(ctx);
-    }
+    const frames = await elementsByIds(ctx, stageIds, FRAME_PROPERTIES);
+    const rect = boundsUnion(frames);
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
 
     return { rect, stageIds };
@@ -186,16 +165,16 @@ async function resolveRegion(
 
 export async function resolveTarget(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null
+    pointer: { x: number; y: number } | null,
+    explicit: string[] = []
 ): Promise<Target | null> {
-    const region = await resolveRegion(ctx, pointer);
+    const region = await resolveRegion(ctx, pointer, explicit);
     if (!region) return null;
 
     const inRegion = (
         await elementsInRect(ctx, region.rect, INK_PROPERTIES)
     ).filter((el) => el.type !== "frame");
     const elements = dropStageElements(inRegion, region.stageIds);
-    if (elements.length === 0) return null;
 
-    return { rect: region.rect, elements };
+    return { rect: region.rect, frameIds: region.stageIds, elements };
 }

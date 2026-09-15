@@ -2,10 +2,12 @@
 
 Play your drawing.
 
-Right-click anything on a Drawdy board and pick **Serene play**. A playhead
-sweeps left to right across the region at a constant rate — a wider region
+Open Serene from the extension rail and it drops a **Serene frame** onto the
+board (or offers to add another). Draw inside it, select it, and press the
+play button that appears above the frame. A playhead sweeps left to right
+across the frame at a constant rate — a wider region
 takes proportionally longer — and every stroke it crosses rings out as a sine
-tone struck hard on the attack, then decaying into a long reverb tail.
+tone with a short, tunable attack, then decaying into a long reverb tail.
 
 Pitch comes from height: the bottom of the region is **C4**, the top is **C7**,
 and everything between snaps to a rung of the chosen scale, so nothing lands on
@@ -28,16 +30,32 @@ switching changes the colour and the number of rungs, never the range.
 A seven-note scale gives the playhead more rungs to cross in the same height,
 so the same drawing has finer pitch resolution and more steps in a slide.
 
+## Serene frames
+
+Only a Serene frame plays. It is an ordinary Drawdy frame tagged with
+`meta.serene = true`, so you can move, resize, duplicate and delete it like any
+other frame. The first time you open the panel with no Serene frame on the
+board, one is added for you at the nearest empty spot around the camera and
+the camera flies to it. After that, the panel's **Add another Serene frame**
+button does the same.
+
+When exactly one Serene frame is selected, a transport bar floats above its top
+edge: a round play button on the left and a seek track spanning the frame's
+width, with a knob that follows playback. Press the button to play the frame;
+while it plays it turns into a stop button and the bar stays pinned to the
+frame being played. Click anywhere on the track to jump there, or drag the knob; a drag lands when you release,
+whether the frame is playing or paused, and the voices under the new position
+pick up mid-note without a fresh attack. The right-click menu still
+offers **Serene play** and **Serene stop** for a selected Serene frame, or for
+the Serene frame under the cursor.
+
 ## What gets played
 
-`Serene play` resolves a region in this order:
-
-1. the current selection — if a frame is selected, the frame's bounds
-2. otherwise whatever sits under the cursor when you right-clicked (an
-   enclosing frame wins over a single element)
-3. otherwise the whole board
-
-Everything intersecting that region becomes ink. Shapes contribute their
+The region is the frame's bounds. Everything intersecting that region becomes
+ink. The score follows the board live: drawing, moving or deleting anything
+inside the frame, or moving the frame itself, rebuilds the score, and while the
+frame is playing the new voices are slotted in ahead of the playhead so a stroke
+you add mid-sweep still sounds when the playhead reaches it. Shapes contribute their
 outline, freedraw and lines their stroke, text and images their bounding box.
 
 Containers are staging, not content, so they stay silent: frames always, and
@@ -72,7 +90,12 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 ## Panel
 
 The extension rail opens a transport panel with play/stop, a speed slider
-(px per second — this is what sets the duration), volume, glide and reverb.
+(px per second — this is what sets the duration), attack (0 to 300 ms, default
+20 ms — how long each voice takes to reach full level), volume, glide and
+reverb, and
+an **Add Serene frame** button with a count of the frames on the board. Every
+knob and the scale are remembered across sessions in the driver's key/value
+storage, which is why the manifest asks for the `storage` permission.
 
 Dry and reverb sum into a mix bus that runs through a limiter before the volume
 control: a dense passage stacks five voices per column on top of the tails of
@@ -92,14 +115,14 @@ clipped samples unlimited, and 0.796 with none through the limiter.
 Audio lives in the panel's webview, which runs in a sandboxed opaque-origin
 iframe. Browsers require one real click inside that frame before a page may
 make sound, so the first play has to come from the panel's ▶ button. After
-that, `Serene play` from the context menu starts playback on its own.
+that, the on-canvas play button and `Serene play` from the context menu start
+playback on their own.
 
 ## Develop
 
 ```bash
-pnpm install --ignore-workspace
+pnpm install
 pnpm dev          # serves /built.drawdyx for the "Add extension dev server" palette command
-pnpm test
 pnpm typecheck
 pnpm build        # dist/drawdy-serene.drawdyx, also copied into frontend/public/extensions
 ```

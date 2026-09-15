@@ -131,6 +131,17 @@ body.playing .dial::before {
 #play:active:not(:disabled) { transform: scale(0.97); }
 #play:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 3px; }
 #play:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
+#play.pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 0 color-mix(in oklab, var(--drawdy-primary, #6366f1) 60%, transparent);
+    }
+    50% {
+        transform: scale(1.07);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 16px color-mix(in oklab, var(--drawdy-primary, #6366f1) 0%, transparent);
+    }
+}
 .time {
     font-variant-numeric: tabular-nums;
     font-size: 12px;
@@ -192,7 +203,7 @@ select:hover { border-color: var(--drawdy-primary, #6366f1); }
 select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .rack {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
     padding: 14px 4px 12px;
 }
@@ -250,6 +261,23 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     font-variant-numeric: tabular-nums;
     color: var(--drawdy-foreground, #111);
 }
+.add-frame {
+    flex: 1;
+    height: 50px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--drawdy-primary, #6366f1);
+    background: transparent;
+    border: 1px dashed var(--drawdy-primary, #6366f1);
+    border-radius: var(--drawdy-radius-md, 9px);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
+.add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
+.add-frame:disabled { opacity: 0.5; cursor: default; }
 .status {
     font-size: 11px;
     line-height: 1.6;
@@ -291,7 +319,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 
     <section class="card rack" id="rack"></section>
 
-    <div class="status" id="status">Right-click anything on the board and pick <b>Serene play</b>.</div>
+    <section class="card">
+        <div class="row">
+            <label for="add-frame">Frames</label>
+            <button id="add-frame" type="button" class="add-frame">Add a Serene frame</button>
+            <span class="val" id="frame-count">0</span>
+        </div>
+    </section>
+
+    <div class="status" id="status">Select a <b>Serene frame</b> and press the play button that appears above it.</div>
 </main>
 <script>
 (function () {
@@ -304,6 +340,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
     var rack = document.getElementById("rack");
+    var addFrameBtn = document.getElementById("add-frame");
+    var frameCountEl = document.getElementById("frame-count");
 
     var ARC_LENGTH = 84.823;
     var ARC_PATH = "M11.27 36.73A18 18 0 1 1 36.73 36.73";
@@ -325,6 +363,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             step: 10,
             value: 220,
             format: function (v) { return String(Math.round(v)); },
+        },
+        {
+            id: "attack",
+            label: "Attack",
+            min: 0,
+            max: 0.3,
+            step: 0.005,
+            value: 0.02,
+            format: function (v) { return Math.round(v * 1000) + "ms"; },
         },
         {
             id: "volume",
@@ -508,6 +555,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         knobs[spec.id] = buildKnob(spec);
     });
     var speedInput = knobs.speed.input;
+    var attackInput = knobs.attack.input;
     var volumeInput = knobs.volume.input;
     var glideInput = knobs.glide.input;
     var reverbInput = knobs.reverb.input;
@@ -516,6 +564,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var TAIL = 0.9;
     var PROGRESS_MS = 33;
     var DECAY = 0.22;
+    var MIN_ATTACK = 0.002;
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PEAK_GAIN = 0.2;
@@ -534,10 +583,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var playing = false;
     var startTime = 0;
     var cursor = 0;
+    var scheduledUntil = 0;
     var voices = [];
     var pumpTimer = null;
     var progressTimer = null;
-    var wantedPlay = false;
     var elapsed = 0;
 
     function audioUnlocked() {
@@ -628,14 +677,19 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         return total / pitches.length;
     }
 
-    function schedulePitches(osc, at, pitches) {
+    function schedulePitches(osc, at, pitches, resumeAt) {
         var glide = Number(glideInput.value);
         var prevTime = at;
         var prevHz = pitches[0].hz;
-        osc.frequency.setValueAtTime(prevHz, at);
+        if (resumeAt !== undefined) {
+            prevTime = resumeAt;
+            prevHz = osc.frequency.value;
+        }
+        osc.frequency.setValueAtTime(prevHz, prevTime);
         for (var i = 1; i < pitches.length; i++) {
             var when = at + pitches[i].t;
-            var span = Math.max(0, when - prevTime);
+            if (when <= prevTime) continue;
+            var span = when - prevTime;
             var slide = Math.min(glide * span, MAX_GLIDE);
             if (slide > 0.004) {
                 if (slide < span) {
@@ -653,28 +707,59 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
     }
 
+    function voiceKey(note, px) {
+        var parts = [Math.round(note.t * px), Math.round((note.t + note.d) * px)];
+        for (var i = 0; i < note.pitches.length; i++) {
+            parts.push(note.pitches[i].row + "@" + Math.round(note.pitches[i].t * px));
+        }
+        return parts.join("|");
+    }
+
+    function holdFor(note) {
+        return Math.max(0.09, note.d);
+    }
+
+    function releaseAt(gain, end) {
+        gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
+    }
+
     function playVoice(note) {
         var ctx = audio.ctx;
+        var now = ctx.currentTime;
         var at = startTime + note.t;
         var peak = Math.max(
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
         var sustain = Math.max(0.0004, peak * SUSTAIN_RATIO);
-        var hold = Math.max(0.09, note.d);
+        var end = Math.max(now, at + holdFor(note));
+        var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
         osc.type = "sine";
         schedulePitches(osc, at, note.pitches);
         var gain = ctx.createGain();
-        gain.gain.setValueAtTime(peak, at);
-        gain.gain.exponentialRampToValueAtTime(sustain, at + DECAY);
-        gain.gain.setTargetAtTime(0.0001, at + hold, RELEASE / 3);
+        if (at >= now) {
+            gain.gain.setValueAtTime(0, at);
+            gain.gain.linearRampToValueAtTime(peak, at + attack);
+            gain.gain.exponentialRampToValueAtTime(sustain, at + attack + DECAY);
+        } else {
+            gain.gain.setValueAtTime(sustain, now);
+        }
+        releaseAt(gain, end);
         osc.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
-        osc.start(at);
-        osc.stop(at + hold + RELEASE + 0.2);
-        var voice = { osc: osc, gain: gain };
+        osc.start(Math.max(at, now));
+        osc.stop(end + RELEASE + 0.2);
+        var voice = {
+            osc: osc,
+            gain: gain,
+            sustain: sustain,
+            start: at,
+            end: end,
+            key: voiceKey(note, score.pxPerSecond),
+            dead: false,
+        };
         voices.push(voice);
         osc.onended = function () {
             var index = voices.indexOf(voice);
@@ -682,25 +767,87 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         };
     }
 
+    function retimeVoice(voice, note) {
+        var ctx = audio.ctx;
+        var now = ctx.currentTime;
+        var at = startTime + note.t;
+        var end = Math.max(now, at + holdFor(note));
+        voice.osc.frequency.cancelScheduledValues(now);
+        schedulePitches(voice.osc, at, note.pitches, now);
+        var level = Math.max(0.0001, voice.gain.gain.value);
+        voice.gain.gain.cancelScheduledValues(now);
+        voice.gain.gain.setValueAtTime(level, now);
+        if (level > voice.sustain * 1.02) {
+            voice.gain.gain.exponentialRampToValueAtTime(
+                voice.sustain,
+                Math.min(end, now + DECAY)
+            );
+        }
+        releaseAt(voice.gain, end);
+        voice.osc.stop(end + RELEASE + 0.2);
+        voice.start = at;
+        voice.end = end;
+        voice.key = voiceKey(note, score.pxPerSecond);
+    }
+
+    function fadeVoice(voice, now) {
+        voice.dead = true;
+        var index = voices.indexOf(voice);
+        if (index >= 0) voices.splice(index, 1);
+        try {
+            voice.gain.gain.cancelScheduledValues(now);
+            voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
+            voice.osc.stop(now + 0.25);
+        } catch (err) {
+            void err;
+        }
+    }
+
     function killVoices() {
         if (!audio) return;
         var now = audio.ctx.currentTime;
-        for (var i = 0; i < voices.length; i++) {
-            var voice = voices[i];
-            try {
-                voice.gain.gain.cancelScheduledValues(now);
-                voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
-                voice.osc.stop(now + 0.25);
-            } catch (err) {
-                void err;
+        var live = voices.slice();
+        for (var i = 0; i < live.length; i++) fadeVoice(live[i], now);
+    }
+
+    function reconcileVoices() {
+        var now = audio.ctx.currentTime;
+        var nowT = now - startTime;
+        var px = score.pxPerSecond;
+        var wanted = {};
+        for (var i = 0; i < score.voices.length; i++) {
+            var note = score.voices[i];
+            if (note.t <= nowT && nowT < note.t + holdFor(note)) {
+                wanted[voiceKey(note, px)] = note;
             }
         }
+        var live = voices.slice();
+        for (var j = 0; j < live.length; j++) {
+            var voice = live[j];
+            if (voice.dead) continue;
+            if (voice.start > now) {
+                fadeVoice(voice, now);
+                continue;
+            }
+            if (voice.end <= now) continue;
+            var match = wanted[voice.key];
+            if (match) {
+                retimeVoice(voice, match);
+                delete wanted[voice.key];
+            } else {
+                fadeVoice(voice, now);
+            }
+        }
+        Object.keys(wanted).forEach(function (key) {
+            playVoice(wanted[key]);
+        });
     }
 
     function pump() {
         if (!playing || !score) return;
         var now = audio.ctx.currentTime;
         var horizon = now + LOOKAHEAD;
+        scheduledUntil = horizon;
         while (
             cursor < score.voices.length &&
             startTime + score.voices[cursor].t < horizon
@@ -724,6 +871,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     function start() {
         if (!score || score.voices.length === 0) return;
         resumeAudio().then(function (ok) {
+            syncPulse();
             if (!ok) {
                 setStatusText(
                     "Audio stays blocked until you click inside this panel.",
@@ -733,15 +881,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             }
             stopTimers();
             killVoices();
-            voices = [];
-            elapsed = 0;
-            cursor = 0;
-            startTime = audio.ctx.currentTime + 0.12;
+            var from = elapsed > 0 && elapsed < score.durationSec ? elapsed : 0;
+            var now = audio.ctx.currentTime;
+            startTime = now + 0.12 - from;
+            scheduledUntil = now;
+            elapsed = from;
+            cursor = firstVoiceAtOrAfter(now - startTime);
             setPlaying(true);
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
             progressTimer = setInterval(tickProgress, PROGRESS_MS);
             pump();
+            reconcileVoices();
             render();
         });
     }
@@ -792,8 +943,63 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         statusEl.className = warn ? "status hint" : "status";
     }
 
+    function syncPulse() {
+        var waitingForFirstClick =
+            Boolean(score) && score.voices.length > 0 && !playing && !audioUnlocked();
+        playBtn.classList.toggle("pulse", waitingForFirstClick);
+    }
+
+    function warpToSpeed(nextSpeed, now) {
+        var oldSpeed = score.pxPerSecond;
+        if (nextSpeed === oldSpeed) return;
+        var playheadPx = (now - startTime) * oldSpeed;
+        startTime = now - playheadPx / nextSpeed;
+    }
+
+    function firstVoiceAtOrAfter(t) {
+        var index = 0;
+        while (index < score.voices.length && score.voices[index].t < t) index++;
+        return index;
+    }
+
+    function swapScore(next) {
+        var now = audio.ctx.currentTime;
+        warpToSpeed(next.pxPerSecond, now);
+        score = next;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(now - startTime);
+        reconcileVoices();
+        render();
+        describe();
+    }
+
+    function seekTo(t) {
+        if (!score) return;
+        var target = Math.max(0, Math.min(score.durationSec, t));
+        if (!playing) {
+            elapsed = target >= score.durationSec ? 0 : target;
+            render();
+            api.postMessage({ type: "progress", t: elapsed });
+            return;
+        }
+        if (target >= score.durationSec) {
+            finish();
+            return;
+        }
+        var now = audio.ctx.currentTime;
+        killVoices();
+        startTime = now - target;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(target);
+        reconcileVoices();
+        elapsed = target;
+        render();
+        api.postMessage({ type: "progress", t: target });
+    }
+
     function describe() {
         if (!score) return;
+        syncPulse();
         if (score.voices.length === 0) {
             setStatusText("Nothing to play in that region.", true);
             return;
@@ -821,6 +1027,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
     }
 
+    function setFrames(count) {
+        frameCountEl.textContent = String(count);
+        addFrameBtn.textContent =
+            count > 0 ? "Add another Serene frame" : "Add a Serene frame";
+        addFrameBtn.disabled = false;
+    }
+
+    addFrameBtn.addEventListener("click", function () {
+        addFrameBtn.disabled = true;
+        api.postMessage({ type: "add-frame" });
+    });
+
     playBtn.addEventListener("click", function () {
         if (playing) {
             stop("stopped");
@@ -830,10 +1048,39 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
 
     speedInput.addEventListener("change", function () {
-        wantedPlay = playing;
-        if (playing) stop("stopped");
         api.postMessage({ type: "speed", value: Number(speedInput.value) });
     });
+
+    function postKnobs() {
+        api.postMessage({
+            type: "knobs",
+            values: {
+                attack: Number(attackInput.value),
+                volume: Number(volumeInput.value),
+                glide: Number(glideInput.value),
+                reverb: Number(reverbInput.value),
+            },
+        });
+    }
+
+    [attackInput, volumeInput, glideInput, reverbInput].forEach(function (input) {
+        input.addEventListener("change", postKnobs);
+    });
+
+    function applySettings(values) {
+        ["attack", "volume", "glide", "reverb"].forEach(function (key) {
+            if (typeof values[key] === "number") {
+                applyKnob(knobs[key], values[key], false, true);
+            }
+        });
+        if (typeof values.speed === "number") {
+            applyKnob(knobs.speed, values.speed, false, true);
+        }
+        if (audio) {
+            audio.master.gain.value = Number(volumeInput.value);
+            audio.wet.gain.value = Number(reverbInput.value);
+        }
+    }
 
     volumeInput.addEventListener("input", function () {
         if (audio) audio.master.gain.value = Number(volumeInput.value);
@@ -844,8 +1091,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
 
     scaleSelect.addEventListener("change", function () {
-        wantedPlay = playing;
-        if (playing) stop("stopped");
         api.postMessage({ type: "scale", value: scaleSelect.value });
     });
 
@@ -857,6 +1102,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
         if (msg.type === "stop") {
             stop("stopped");
+            return;
+        }
+        if (msg.type === "frames") {
+            setFrames(msg.count);
+            return;
+        }
+        if (msg.type === "settings") {
+            applySettings(msg.values);
+            return;
+        }
+        if (msg.type === "seek") {
+            seekTo(msg.t);
             return;
         }
         if (msg.type === "scales") {
@@ -871,6 +1128,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             return;
         }
         if (msg.type !== "score") return;
+        if (msg.live && playing) {
+            swapScore(msg.score);
+            return;
+        }
         if (playing) stop("stopped");
         score = msg.score;
         if (scaleSelect.options.length > 0) scaleSelect.value = score.scaleId;
@@ -879,11 +1140,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         playBtn.disabled = score.voices.length === 0;
         render();
         describe();
-        if ((msg.autoplay || wantedPlay) && audioUnlocked()) {
-            wantedPlay = false;
-            start();
-        }
-        wantedPlay = false;
+        api.postMessage({ type: "progress", t: 0 });
+        if (msg.autoplay && audioUnlocked()) start();
     });
 
     render();

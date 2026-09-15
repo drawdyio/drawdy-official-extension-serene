@@ -8,14 +8,13 @@
   "scripts": {
     "dev": "vite",
     "build": "node build.ts && node install-local.mjs",
-    "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20",
     "typescript": "^5",
     "vite": "^8.2.1",
-    "@drawdy/driver-protocol": "latest",
+    "@drawdy/driver-protocol": "0.1.9",
     "@rollup/plugin-typescript": "^12.1.2",
     "fflate": "^0.8.2",
     "rollup": "^4.34.0",

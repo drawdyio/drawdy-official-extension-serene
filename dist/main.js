@@ -208,6 +208,17 @@ body.playing .dial::before {
 #play:active:not(:disabled) { transform: scale(0.97); }
 #play:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 3px; }
 #play:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
+#play.pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 0 color-mix(in oklab, var(--drawdy-primary, #6366f1) 60%, transparent);
+    }
+    50% {
+        transform: scale(1.07);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 16px color-mix(in oklab, var(--drawdy-primary, #6366f1) 0%, transparent);
+    }
+}
 .time {
     font-variant-numeric: tabular-nums;
     font-size: 12px;
@@ -269,7 +280,7 @@ select:hover { border-color: var(--drawdy-primary, #6366f1); }
 select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 .rack {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
     padding: 14px 4px 12px;
 }
@@ -327,6 +338,23 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     font-variant-numeric: tabular-nums;
     color: var(--drawdy-foreground, #111);
 }
+.add-frame {
+    flex: 1;
+    height: 50px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--drawdy-primary, #6366f1);
+    background: transparent;
+    border: 1px dashed var(--drawdy-primary, #6366f1);
+    border-radius: var(--drawdy-radius-md, 9px);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
+.add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
+.add-frame:disabled { opacity: 0.5; cursor: default; }
 .status {
     font-size: 11px;
     line-height: 1.6;
@@ -368,7 +396,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 
     <section class="card rack" id="rack"></section>
 
-    <div class="status" id="status">Right-click anything on the board and pick <b>Serene play</b>.</div>
+    <section class="card">
+        <div class="row">
+            <label for="add-frame">Frames</label>
+            <button id="add-frame" type="button" class="add-frame">Add a Serene frame</button>
+            <span class="val" id="frame-count">0</span>
+        </div>
+    </section>
+
+    <div class="status" id="status">Select a <b>Serene frame</b> and press the play button that appears above it.</div>
 </main>
 <script>
 (function () {
@@ -381,6 +417,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var statusEl = document.getElementById("status");
     var scaleSelect = document.getElementById("scale");
     var rack = document.getElementById("rack");
+    var addFrameBtn = document.getElementById("add-frame");
+    var frameCountEl = document.getElementById("frame-count");
 
     var ARC_LENGTH = 84.823;
     var ARC_PATH = "M11.27 36.73A18 18 0 1 1 36.73 36.73";
@@ -402,6 +440,15 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             step: 10,
             value: 220,
             format: function (v) { return String(Math.round(v)); },
+        },
+        {
+            id: "attack",
+            label: "Attack",
+            min: 0,
+            max: 0.3,
+            step: 0.005,
+            value: 0.02,
+            format: function (v) { return Math.round(v * 1000) + "ms"; },
         },
         {
             id: "volume",
@@ -585,6 +632,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         knobs[spec.id] = buildKnob(spec);
     });
     var speedInput = knobs.speed.input;
+    var attackInput = knobs.attack.input;
     var volumeInput = knobs.volume.input;
     var glideInput = knobs.glide.input;
     var reverbInput = knobs.reverb.input;
@@ -593,6 +641,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var TAIL = 0.9;
     var PROGRESS_MS = 33;
     var DECAY = 0.22;
+    var MIN_ATTACK = 0.002;
     var SUSTAIN_RATIO = 0.45;
     var RELEASE = 0.55;
     var PEAK_GAIN = 0.2;
@@ -611,10 +660,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var playing = false;
     var startTime = 0;
     var cursor = 0;
+    var scheduledUntil = 0;
     var voices = [];
     var pumpTimer = null;
     var progressTimer = null;
-    var wantedPlay = false;
     var elapsed = 0;
 
     function audioUnlocked() {
@@ -705,14 +754,19 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         return total / pitches.length;
     }
 
-    function schedulePitches(osc, at, pitches) {
+    function schedulePitches(osc, at, pitches, resumeAt) {
         var glide = Number(glideInput.value);
         var prevTime = at;
         var prevHz = pitches[0].hz;
-        osc.frequency.setValueAtTime(prevHz, at);
+        if (resumeAt !== undefined) {
+            prevTime = resumeAt;
+            prevHz = osc.frequency.value;
+        }
+        osc.frequency.setValueAtTime(prevHz, prevTime);
         for (var i = 1; i < pitches.length; i++) {
             var when = at + pitches[i].t;
-            var span = Math.max(0, when - prevTime);
+            if (when <= prevTime) continue;
+            var span = when - prevTime;
             var slide = Math.min(glide * span, MAX_GLIDE);
             if (slide > 0.004) {
                 if (slide < span) {
@@ -730,28 +784,59 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
     }
 
+    function voiceKey(note, px) {
+        var parts = [Math.round(note.t * px), Math.round((note.t + note.d) * px)];
+        for (var i = 0; i < note.pitches.length; i++) {
+            parts.push(note.pitches[i].row + "@" + Math.round(note.pitches[i].t * px));
+        }
+        return parts.join("|");
+    }
+
+    function holdFor(note) {
+        return Math.max(0.09, note.d);
+    }
+
+    function releaseAt(gain, end) {
+        gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
+    }
+
     function playVoice(note) {
         var ctx = audio.ctx;
+        var now = ctx.currentTime;
         var at = startTime + note.t;
         var peak = Math.max(
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
         var sustain = Math.max(0.0004, peak * SUSTAIN_RATIO);
-        var hold = Math.max(0.09, note.d);
+        var end = Math.max(now, at + holdFor(note));
+        var attack = Math.max(MIN_ATTACK, Number(attackInput.value));
         var osc = ctx.createOscillator();
         osc.type = "sine";
         schedulePitches(osc, at, note.pitches);
         var gain = ctx.createGain();
-        gain.gain.setValueAtTime(peak, at);
-        gain.gain.exponentialRampToValueAtTime(sustain, at + DECAY);
-        gain.gain.setTargetAtTime(0.0001, at + hold, RELEASE / 3);
+        if (at >= now) {
+            gain.gain.setValueAtTime(0, at);
+            gain.gain.linearRampToValueAtTime(peak, at + attack);
+            gain.gain.exponentialRampToValueAtTime(sustain, at + attack + DECAY);
+        } else {
+            gain.gain.setValueAtTime(sustain, now);
+        }
+        releaseAt(gain, end);
         osc.connect(gain);
         gain.connect(audio.dry);
         gain.connect(audio.send);
-        osc.start(at);
-        osc.stop(at + hold + RELEASE + 0.2);
-        var voice = { osc: osc, gain: gain };
+        osc.start(Math.max(at, now));
+        osc.stop(end + RELEASE + 0.2);
+        var voice = {
+            osc: osc,
+            gain: gain,
+            sustain: sustain,
+            start: at,
+            end: end,
+            key: voiceKey(note, score.pxPerSecond),
+            dead: false,
+        };
         voices.push(voice);
         osc.onended = function () {
             var index = voices.indexOf(voice);
@@ -759,25 +844,87 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         };
     }
 
+    function retimeVoice(voice, note) {
+        var ctx = audio.ctx;
+        var now = ctx.currentTime;
+        var at = startTime + note.t;
+        var end = Math.max(now, at + holdFor(note));
+        voice.osc.frequency.cancelScheduledValues(now);
+        schedulePitches(voice.osc, at, note.pitches, now);
+        var level = Math.max(0.0001, voice.gain.gain.value);
+        voice.gain.gain.cancelScheduledValues(now);
+        voice.gain.gain.setValueAtTime(level, now);
+        if (level > voice.sustain * 1.02) {
+            voice.gain.gain.exponentialRampToValueAtTime(
+                voice.sustain,
+                Math.min(end, now + DECAY)
+            );
+        }
+        releaseAt(voice.gain, end);
+        voice.osc.stop(end + RELEASE + 0.2);
+        voice.start = at;
+        voice.end = end;
+        voice.key = voiceKey(note, score.pxPerSecond);
+    }
+
+    function fadeVoice(voice, now) {
+        voice.dead = true;
+        var index = voices.indexOf(voice);
+        if (index >= 0) voices.splice(index, 1);
+        try {
+            voice.gain.gain.cancelScheduledValues(now);
+            voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
+            voice.osc.stop(now + 0.25);
+        } catch (err) {
+            void err;
+        }
+    }
+
     function killVoices() {
         if (!audio) return;
         var now = audio.ctx.currentTime;
-        for (var i = 0; i < voices.length; i++) {
-            var voice = voices[i];
-            try {
-                voice.gain.gain.cancelScheduledValues(now);
-                voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
-                voice.osc.stop(now + 0.25);
-            } catch (err) {
-                void err;
+        var live = voices.slice();
+        for (var i = 0; i < live.length; i++) fadeVoice(live[i], now);
+    }
+
+    function reconcileVoices() {
+        var now = audio.ctx.currentTime;
+        var nowT = now - startTime;
+        var px = score.pxPerSecond;
+        var wanted = {};
+        for (var i = 0; i < score.voices.length; i++) {
+            var note = score.voices[i];
+            if (note.t <= nowT && nowT < note.t + holdFor(note)) {
+                wanted[voiceKey(note, px)] = note;
             }
         }
+        var live = voices.slice();
+        for (var j = 0; j < live.length; j++) {
+            var voice = live[j];
+            if (voice.dead) continue;
+            if (voice.start > now) {
+                fadeVoice(voice, now);
+                continue;
+            }
+            if (voice.end <= now) continue;
+            var match = wanted[voice.key];
+            if (match) {
+                retimeVoice(voice, match);
+                delete wanted[voice.key];
+            } else {
+                fadeVoice(voice, now);
+            }
+        }
+        Object.keys(wanted).forEach(function (key) {
+            playVoice(wanted[key]);
+        });
     }
 
     function pump() {
         if (!playing || !score) return;
         var now = audio.ctx.currentTime;
         var horizon = now + LOOKAHEAD;
+        scheduledUntil = horizon;
         while (
             cursor < score.voices.length &&
             startTime + score.voices[cursor].t < horizon
@@ -801,6 +948,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     function start() {
         if (!score || score.voices.length === 0) return;
         resumeAudio().then(function (ok) {
+            syncPulse();
             if (!ok) {
                 setStatusText(
                     "Audio stays blocked until you click inside this panel.",
@@ -810,15 +958,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             }
             stopTimers();
             killVoices();
-            voices = [];
-            elapsed = 0;
-            cursor = 0;
-            startTime = audio.ctx.currentTime + 0.12;
+            var from = elapsed > 0 && elapsed < score.durationSec ? elapsed : 0;
+            var now = audio.ctx.currentTime;
+            startTime = now + 0.12 - from;
+            scheduledUntil = now;
+            elapsed = from;
+            cursor = firstVoiceAtOrAfter(now - startTime);
             setPlaying(true);
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
             progressTimer = setInterval(tickProgress, PROGRESS_MS);
             pump();
+            reconcileVoices();
             render();
         });
     }
@@ -869,8 +1020,63 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         statusEl.className = warn ? "status hint" : "status";
     }
 
+    function syncPulse() {
+        var waitingForFirstClick =
+            Boolean(score) && score.voices.length > 0 && !playing && !audioUnlocked();
+        playBtn.classList.toggle("pulse", waitingForFirstClick);
+    }
+
+    function warpToSpeed(nextSpeed, now) {
+        var oldSpeed = score.pxPerSecond;
+        if (nextSpeed === oldSpeed) return;
+        var playheadPx = (now - startTime) * oldSpeed;
+        startTime = now - playheadPx / nextSpeed;
+    }
+
+    function firstVoiceAtOrAfter(t) {
+        var index = 0;
+        while (index < score.voices.length && score.voices[index].t < t) index++;
+        return index;
+    }
+
+    function swapScore(next) {
+        var now = audio.ctx.currentTime;
+        warpToSpeed(next.pxPerSecond, now);
+        score = next;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(now - startTime);
+        reconcileVoices();
+        render();
+        describe();
+    }
+
+    function seekTo(t) {
+        if (!score) return;
+        var target = Math.max(0, Math.min(score.durationSec, t));
+        if (!playing) {
+            elapsed = target >= score.durationSec ? 0 : target;
+            render();
+            api.postMessage({ type: "progress", t: elapsed });
+            return;
+        }
+        if (target >= score.durationSec) {
+            finish();
+            return;
+        }
+        var now = audio.ctx.currentTime;
+        killVoices();
+        startTime = now - target;
+        scheduledUntil = now;
+        cursor = firstVoiceAtOrAfter(target);
+        reconcileVoices();
+        elapsed = target;
+        render();
+        api.postMessage({ type: "progress", t: target });
+    }
+
     function describe() {
         if (!score) return;
+        syncPulse();
         if (score.voices.length === 0) {
             setStatusText("Nothing to play in that region.", true);
             return;
@@ -898,6 +1104,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         );
     }
 
+    function setFrames(count) {
+        frameCountEl.textContent = String(count);
+        addFrameBtn.textContent =
+            count > 0 ? "Add another Serene frame" : "Add a Serene frame";
+        addFrameBtn.disabled = false;
+    }
+
+    addFrameBtn.addEventListener("click", function () {
+        addFrameBtn.disabled = true;
+        api.postMessage({ type: "add-frame" });
+    });
+
     playBtn.addEventListener("click", function () {
         if (playing) {
             stop("stopped");
@@ -907,10 +1125,39 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
 
     speedInput.addEventListener("change", function () {
-        wantedPlay = playing;
-        if (playing) stop("stopped");
         api.postMessage({ type: "speed", value: Number(speedInput.value) });
     });
+
+    function postKnobs() {
+        api.postMessage({
+            type: "knobs",
+            values: {
+                attack: Number(attackInput.value),
+                volume: Number(volumeInput.value),
+                glide: Number(glideInput.value),
+                reverb: Number(reverbInput.value),
+            },
+        });
+    }
+
+    [attackInput, volumeInput, glideInput, reverbInput].forEach(function (input) {
+        input.addEventListener("change", postKnobs);
+    });
+
+    function applySettings(values) {
+        ["attack", "volume", "glide", "reverb"].forEach(function (key) {
+            if (typeof values[key] === "number") {
+                applyKnob(knobs[key], values[key], false, true);
+            }
+        });
+        if (typeof values.speed === "number") {
+            applyKnob(knobs.speed, values.speed, false, true);
+        }
+        if (audio) {
+            audio.master.gain.value = Number(volumeInput.value);
+            audio.wet.gain.value = Number(reverbInput.value);
+        }
+    }
 
     volumeInput.addEventListener("input", function () {
         if (audio) audio.master.gain.value = Number(volumeInput.value);
@@ -921,8 +1168,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     });
 
     scaleSelect.addEventListener("change", function () {
-        wantedPlay = playing;
-        if (playing) stop("stopped");
         api.postMessage({ type: "scale", value: scaleSelect.value });
     });
 
@@ -934,6 +1179,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
         if (msg.type === "stop") {
             stop("stopped");
+            return;
+        }
+        if (msg.type === "frames") {
+            setFrames(msg.count);
+            return;
+        }
+        if (msg.type === "settings") {
+            applySettings(msg.values);
+            return;
+        }
+        if (msg.type === "seek") {
+            seekTo(msg.t);
             return;
         }
         if (msg.type === "scales") {
@@ -948,6 +1205,10 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             return;
         }
         if (msg.type !== "score") return;
+        if (msg.live && playing) {
+            swapScore(msg.score);
+            return;
+        }
         if (playing) stop("stopped");
         score = msg.score;
         if (scaleSelect.options.length > 0) scaleSelect.value = score.scaleId;
@@ -956,11 +1217,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         playBtn.disabled = score.voices.length === 0;
         render();
         describe();
-        if ((msg.autoplay || wantedPlay) && audioUnlocked()) {
-            wantedPlay = false;
-            start();
-        }
-        wantedPlay = false;
+        api.postMessage({ type: "progress", t: 0 });
+        if (msg.autoplay && audioUnlocked()) start();
     });
 
     render();
@@ -1209,6 +1467,12 @@ function evenPick(items, keep) {
         out.push(items[Math.round((i * (items.length - 1)) / (keep - 1))]);
     }
     return out;
+}
+function rectsOverlap(a, b) {
+    return (a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y);
 }
 
 const ELLIPSE_SEGMENTS = 48;
@@ -1495,6 +1759,158 @@ function playheadX(score, elapsedSec) {
     return score.rect.x + (t / score.durationSec) * score.rect.width;
 }
 
+const SERENE_META_KEY = "serene";
+const FRAME_WIDTH = 960;
+const FRAME_HEIGHT = 600;
+const FRAME_GAP = 80;
+const SEARCH_RINGS = 6;
+const FLY_MS = 600;
+const FLY_MAX_ZOOM = 1;
+const FRAME_PROPERTIES = [
+    "type",
+    "meta",
+    "x",
+    "y",
+    "width",
+    "height",
+];
+const BOUNDS_PROPERTIES = [
+    "type",
+    "x",
+    "y",
+    "width",
+    "height",
+];
+function isSereneFrame(el) {
+    return el.type === "frame" && el.meta?.[SERENE_META_KEY] === true;
+}
+function sereneFrameSchema(id, origin) {
+    return {
+        type: "frame",
+        drawdyElementId: id,
+        position: [origin.x, origin.y],
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+        rotation: 0,
+        meta: { [SERENE_META_KEY]: true },
+    };
+}
+function overlaps(a, b) {
+    return (a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y);
+}
+function pad(rect, amount) {
+    return {
+        x: rect.x - amount,
+        y: rect.y - amount,
+        width: rect.width + amount * 2,
+        height: rect.height + amount * 2,
+    };
+}
+function findFreeSpot(center, size, occupied, gap) {
+    const stepX = (size.width + gap) / 2;
+    const stepY = (size.height + gap) / 2;
+    const candidates = [];
+    for (let i = -SEARCH_RINGS; i <= SEARCH_RINGS; i++) {
+        for (let j = -SEARCH_RINGS; j <= SEARCH_RINGS; j++) {
+            const dx = i * stepX;
+            const dy = j * stepY;
+            candidates.push({
+                rect: {
+                    x: center.x + dx - size.width / 2,
+                    y: center.y + dy - size.height / 2,
+                    width: size.width,
+                    height: size.height,
+                },
+                distance: Math.hypot(dx, dy),
+            });
+        }
+    }
+    candidates.sort((a, b) => a.distance - b.distance);
+    const free = candidates.find(({ rect }) => !occupied.some((taken) => overlaps(pad(rect, gap), taken)));
+    if (free)
+        return free.rect;
+    const union = combineRects(occupied);
+    const rightEdge = union ? union.x + union.width : center.x;
+    return {
+        x: rightEdge + gap,
+        y: center.y - size.height / 2,
+        width: size.width,
+        height: size.height,
+    };
+}
+async function framesWith(ctx, drawdyElementIds) {
+    const { drawdyElements } = unwrap(await ctx.issueCommand({
+        type: "command:scene:get-drawdy-elements",
+        ...stamp(ctx),
+        req: { properties: FRAME_PROPERTIES, drawdyElementIds },
+    }));
+    return drawdyElements.filter(isSereneFrame);
+}
+async function listSereneFrames(ctx) {
+    return framesWith(ctx);
+}
+async function sereneFramesAmong(ctx, ids) {
+    if (ids.length === 0)
+        return [];
+    return framesWith(ctx, ids);
+}
+async function occupiedAround(ctx, center) {
+    const reachX = FRAME_WIDTH * (SEARCH_RINGS + 1);
+    const reachY = FRAME_HEIGHT * (SEARCH_RINGS + 1);
+    const { drawdyElements } = unwrap(await ctx.issueCommand({
+        type: "command:scene:query-rect",
+        ...stamp(ctx),
+        req: {
+            rect: {
+                x: center.x - reachX,
+                y: center.y - reachY,
+                width: reachX * 2,
+                height: reachY * 2,
+            },
+            properties: BOUNDS_PROPERTIES,
+        },
+    }));
+    return drawdyElements
+        .map(elementBounds)
+        .filter((r) => r !== null);
+}
+async function addSereneFrame(ctx) {
+    const { rect: viewport } = unwrap(await ctx.issueCommand({
+        type: "command:camera:get-viewport-rect",
+        ...stamp(ctx),
+    }));
+    const center = {
+        x: viewport.x + viewport.width / 2,
+        y: viewport.y + viewport.height / 2,
+    };
+    const occupied = await occupiedAround(ctx, center);
+    const spot = findFreeSpot(center, { width: FRAME_WIDTH, height: FRAME_HEIGHT }, occupied, FRAME_GAP);
+    const id = ctx.generateId();
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:add-drawdy-elements",
+        ...stamp(ctx),
+        req: { elements: [sereneFrameSchema(id, spot)] },
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:set-selection",
+        ...stamp(ctx),
+        req: { drawdyElementIds: [id] },
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "command:camera:fly-to-rect",
+        ...stamp(ctx),
+        req: {
+            rect: pad(spot, FRAME_GAP),
+            flyDurationMs: FLY_MS,
+            zoom: FLY_MAX_ZOOM,
+        },
+    }));
+    return id;
+}
+
 const INK_PROPERTIES = [
     "type",
     "componentType",
@@ -1504,13 +1920,6 @@ const INK_PROPERTIES = [
     "height",
     "points",
     "rotation",
-];
-const BOUNDS_PROPERTIES = [
-    "type",
-    "x",
-    "y",
-    "width",
-    "height",
 ];
 const HIT_PAD = 8;
 const STAGE_TOLERANCE = 1;
@@ -1559,44 +1968,34 @@ function boundsUnion(elements) {
         .filter((r) => r !== null);
     return combineRects(rects);
 }
-async function boardRect(ctx) {
-    const { drawdyElements } = unwrap(await ctx.issueCommand({
-        type: "command:scene:get-drawdy-elements",
-        ...stamp(ctx),
-        req: { properties: BOUNDS_PROPERTIES },
-    }));
-    return boundsUnion(drawdyElements);
-}
-function pickHit(hits, pointer) {
-    const enclosingFrame = hits.find((el) => {
-        if (el.type !== "frame")
-            return false;
-        const bounds = elementBounds(el);
-        return bounds ? rectContainsPoint(bounds, pointer.x, pointer.y) : false;
-    });
-    if (enclosingFrame)
-        return enclosingFrame;
+function smallestFrameUnder(frames, pointer) {
     let smallest = null;
     let smallestArea = Infinity;
-    for (const el of hits) {
-        const bounds = elementBounds(el);
-        if (!bounds)
+    for (const frame of frames) {
+        const bounds = elementBounds(frame);
+        if (!bounds || !rectContainsPoint(bounds, pointer.x, pointer.y))
             continue;
         const area = rectArea(bounds);
         if (area < smallestArea) {
             smallestArea = area;
-            smallest = el;
+            smallest = frame;
         }
     }
     return smallest;
 }
-async function seedIds(ctx, pointer) {
+async function seedFrameIds(ctx, pointer, explicit) {
+    if (explicit.length > 0)
+        return explicit;
     const { drawdyElementIds } = unwrap(await ctx.issueCommand({
         type: "command:scene:get-current-selected-drawdy-elements",
         ...stamp(ctx),
     }));
-    if (drawdyElementIds.length > 0)
-        return drawdyElementIds;
+    if (drawdyElementIds.length > 0) {
+        const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
+        const frames = selected.filter(isSereneFrame).map((el) => el.id);
+        if (frames.length > 0)
+            return frames;
+    }
     if (!pointer)
         return [];
     const hits = await elementsInRect(ctx, {
@@ -1604,53 +2003,125 @@ async function seedIds(ctx, pointer) {
         y: pointer.y - HIT_PAD,
         width: HIT_PAD * 2,
         height: HIT_PAD * 2,
-    }, BOUNDS_PROPERTIES);
-    const hit = pickHit(hits, pointer);
-    return hit ? [hit.id] : [];
+    }, FRAME_PROPERTIES);
+    const frame = smallestFrameUnder(hits.filter(isSereneFrame), pointer);
+    return frame ? [frame.id] : [];
 }
-async function resolveRegion(ctx, pointer) {
-    const stageIds = await seedIds(ctx, pointer);
-    let rect;
-    if (stageIds.length > 0) {
-        const seeds = await elementsByIds(ctx, stageIds, BOUNDS_PROPERTIES);
-        const frames = seeds.filter((el) => el.type === "frame");
-        rect = boundsUnion(frames.length > 0 ? frames : seeds);
-    }
-    else {
-        rect = await boardRect(ctx);
-    }
+async function resolveRegion(ctx, pointer, explicit) {
+    const stageIds = await seedFrameIds(ctx, pointer, explicit);
+    if (stageIds.length === 0)
+        return null;
+    const frames = await elementsByIds(ctx, stageIds, FRAME_PROPERTIES);
+    const rect = boundsUnion(frames);
     if (!rect || rect.width <= 0 || rect.height <= 0)
         return null;
     return { rect, stageIds };
 }
-async function resolveTarget(ctx, pointer) {
-    const region = await resolveRegion(ctx, pointer);
+async function resolveTarget(ctx, pointer, explicit = []) {
+    const region = await resolveRegion(ctx, pointer, explicit);
     if (!region)
         return null;
     const inRegion = (await elementsInRect(ctx, region.rect, INK_PROPERTIES)).filter((el) => el.type !== "frame");
     const elements = dropStageElements(inRegion, region.stageIds);
-    if (elements.length === 0)
-        return null;
-    return { rect: region.rect, elements };
+    return { rect: region.rect, frameIds: region.stageIds, elements };
+}
+
+const SETTINGS_KEY = "settings";
+const DEFAULT_SETTINGS = {
+    speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
+    scale: DEFAULT_SCALE_ID,
+    attack: 0.02,
+    volume: 0.7,
+    glide: 0.3,
+    reverb: 0.38,
+};
+const KNOB_RANGES = {
+    attack: [0, 0.3],
+    volume: [0, 1],
+    glide: [0, 1],
+    reverb: [0, 1],
+};
+function clampNumber(value, min, max, fallback) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+        return fallback;
+    return Math.min(max, Math.max(min, value));
+}
+function sanitizeKnobs(raw, current) {
+    const next = { ...current };
+    for (const key of Object.keys(KNOB_RANGES)) {
+        const [min, max] = KNOB_RANGES[key];
+        next[key] = clampNumber(raw[key], min, max, current[key]);
+    }
+    return next;
+}
+function sanitizeSettings(raw) {
+    const scale = typeof raw.scale === "string" ? getScale(raw.scale).id : DEFAULT_SETTINGS.scale;
+    const speed = typeof raw.speed === "number" && Number.isFinite(raw.speed)
+        ? clampSpeed(raw.speed)
+        : DEFAULT_SETTINGS.speed;
+    return { ...sanitizeKnobs(raw, DEFAULT_SETTINGS), speed, scale };
+}
+async function loadSettings(ctx) {
+    try {
+        const response = await ctx.issueCommand({
+            type: "command:kv-storage:get",
+            ...stamp(ctx),
+            req: { key: SETTINGS_KEY },
+        });
+        if (response.res.error !== undefined || !response.res.value.got) {
+            return DEFAULT_SETTINGS;
+        }
+        return sanitizeSettings(response.res.value.got);
+    }
+    catch {
+        return DEFAULT_SETTINGS;
+    }
+}
+function saveSettings(ctx, settings) {
+    void ctx
+        .issueCommand({
+        type: "command:kv-storage:set",
+        ...stamp(ctx),
+        req: { key: SETTINGS_KEY, payload: settings },
+    })
+        .catch(() => undefined);
 }
 
 const EMPTY_REGION = { x: 0, y: 0, width: 1, height: 1 };
+const REFRESH_DEBOUNCE_MS = 120;
+function sameRect(a, b) {
+    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
 class SereneSession {
     _ctx;
     _playhead;
+    _transport;
     _styling;
     _score = null;
     _rect = null;
     _lines = [];
     _elementCount = 0;
-    _speed = DEFAULT_SCORE_OPTIONS.pxPerSecond;
-    _scale = DEFAULT_SCALE_ID;
+    _settings = DEFAULT_SETTINGS;
     _pointer = null;
     _pendingAutoplay = false;
-    constructor(_ctx, _playhead, _styling) {
+    _frameIds = [];
+    _playing = false;
+    _refreshTimer = null;
+    constructor(_ctx, _playhead, _transport, _styling) {
         this._ctx = _ctx;
         this._playhead = _playhead;
+        this._transport = _transport;
         this._styling = _styling;
+    }
+    async restoreSettings() {
+        this._settings = await loadSettings(this._ctx);
+    }
+    _updateSettings(patch) {
+        this._settings = { ...this._settings, ...patch };
+        saveSettings(this._ctx, this._settings);
+    }
+    postSettings() {
+        postToPanel(this._ctx, { type: "settings", values: this._settings });
     }
     setPointer(pointer) {
         this._pointer = pointer;
@@ -1658,15 +2129,38 @@ class SereneSession {
     setStyling(styling) {
         this._styling = styling;
         this._playhead.setStyling(styling);
+        this._transport.setStyling(styling);
     }
     async openPanel() {
         await openPanel(this._ctx, this._styling);
+    }
+    async openFromRail() {
+        await this.openPanel();
+        this.postTheme();
+        const frames = await listSereneFrames(this._ctx);
+        if (frames.length === 0) {
+            await this.addFrame();
+            return;
+        }
+        this.postFrames(frames.length);
+    }
+    async addFrame() {
+        try {
+            await addSereneFrame(this._ctx);
+        }
+        finally {
+            await this.postFrames();
+        }
+    }
+    async postFrames(count) {
+        const total = count ?? (await listSereneFrames(this._ctx)).length;
+        postToPanel(this._ctx, { type: "frames", count: total });
     }
     postScales() {
         postToPanel(this._ctx, {
             type: "scales",
             scales: scaleOptions(),
-            current: this._scale,
+            current: this._settings.scale,
         });
     }
     postTheme() {
@@ -1675,31 +2169,75 @@ class SereneSession {
             css: stylingCssVars(this._styling),
         });
     }
-    async _resolve() {
-        const target = await resolveTarget(this._ctx, this._pointer);
+    async _resolve(seedIds) {
+        const target = await resolveTarget(this._ctx, this._pointer, seedIds);
         if (!target) {
             this._rect = null;
+            this._frameIds = [];
             this._lines = [];
             this._elementCount = 0;
             this._score = buildScore(EMPTY_REGION, [], {
-                scale: this._scale,
+                scale: this._settings.scale,
             });
             return false;
         }
         this._rect = target.rect;
+        this._frameIds = target.frameIds;
         this._elementCount = target.elements.length;
         this._lines = sceneInk(target.elements);
         this._rebuild();
         return true;
     }
-    async play() {
-        const resolved = await this._resolve();
+    async play(seedIds = []) {
+        const resolved = await this._resolve(seedIds);
         await this.openPanel();
         if (!resolved) {
             this._postScore(false);
             return;
         }
         this._postScore(true);
+    }
+    onSceneChanged(changed) {
+        const rect = this._rect;
+        if (!rect)
+            return;
+        const touches = changed.some((el) => {
+            if (this._frameIds.includes(el.id))
+                return true;
+            const bounds = elementBounds(el);
+            return bounds ? rectsOverlap(bounds, rect) : false;
+        });
+        if (!touches)
+            return;
+        if (this._refreshTimer)
+            clearTimeout(this._refreshTimer);
+        this._refreshTimer = setTimeout(() => {
+            this._refreshTimer = null;
+            void this._refresh();
+        }, REFRESH_DEBOUNCE_MS);
+    }
+    async _refresh() {
+        const previous = this._rect;
+        const resolved = await this._resolve(this._frameIds);
+        if (!resolved) {
+            if (this._playing)
+                await this.stop();
+            this._postScore(false);
+            return;
+        }
+        const rect = this._rect;
+        if (this._playing && rect && previous && !sameRect(rect, previous)) {
+            await this._playhead.show(rect);
+        }
+        this._postScore(false, true);
+    }
+    seek(progress) {
+        if (!this._score)
+            return;
+        postToPanel(this._ctx, {
+            type: "seek",
+            t: progress * this._score.durationSec,
+        });
     }
     async stop() {
         postToPanel(this._ctx, { type: "stop" });
@@ -1709,7 +2247,9 @@ class SereneSession {
         switch (message.type) {
             case "ready":
                 this.postTheme();
+                this.postSettings();
                 this.postScales();
+                void this.postFrames();
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
@@ -1718,31 +2258,45 @@ class SereneSession {
                 return;
             case "started":
                 this._pendingAutoplay = false;
+                this._playing = true;
                 if (this._rect)
                     await this._playhead.show(this._rect);
+                this._transport.setPlaying(this._rect);
                 return;
             case "progress":
                 if (this._score) {
                     this._playhead.move(playheadX(this._score, message.t));
+                    this._transport.setProgress(this._score.durationSec > 0
+                        ? message.t / this._score.durationSec
+                        : 0);
                 }
                 return;
             case "ended":
             case "stopped":
+                this._playing = false;
+                this._transport.setPlaying(null);
+                this._transport.setProgress(0);
                 await this._playhead.hide();
                 return;
+            case "add-frame":
+                await this.addFrame();
+                return;
+            case "knobs":
+                this._updateSettings(sanitizeKnobs(message.values, this._settings));
+                return;
             case "speed":
-                this._speed = clampSpeed(message.value);
+                this._updateSettings({ speed: clampSpeed(message.value) });
                 if (!this._rect)
                     return;
                 this._rebuild();
-                this._postScore(false);
+                this._postScore(false, true);
                 return;
             case "scale":
-                this._scale = getScale(message.value).id;
+                this._updateSettings({ scale: getScale(message.value).id });
                 if (!this._rect)
                     return;
                 this._rebuild();
-                this._postScore(false);
+                this._postScore(false, true);
                 return;
         }
     }
@@ -1750,11 +2304,11 @@ class SereneSession {
         if (!this._rect)
             return;
         this._score = buildScore(this._rect, this._lines, {
-            pxPerSecond: this._speed,
-            scale: this._scale,
+            pxPerSecond: this._settings.speed,
+            scale: this._settings.scale,
         });
     }
-    _postScore(autoplay) {
+    _postScore(autoplay, live = false) {
         if (!this._score)
             return;
         if (autoplay)
@@ -1763,10 +2317,384 @@ class SereneSession {
             type: "score",
             score: serializeScore(this._score, this._elementCount),
             autoplay,
+            live,
         });
     }
 }
 
+const BUTTON_SIZE = 28;
+const BAR_GAP = 12;
+const TRACK_GAP = 10;
+const TRACK_WIDTH = 3;
+const KNOB_SIZE = 14;
+const KNOB_ACTIVE_SIZE = 20;
+const TRACK_HIT_HEIGHT = 24;
+const HOVER_SCALE = 1.15;
+const MIN_TRACK = 40;
+const FRAME_LABEL_REACH = 12 * (1.75 + 0.35);
+const GLYPH_RATIO = 0.5;
+const SHIELD_REACH = 1;
+const BUTTON_SEED = 13;
+const TRACK_SEED = 17;
+const PLAYED_SEED = 19;
+const KNOB_SEED = 23;
+const SHIELD_SEED = 29;
+const HIT_SEED = 31;
+function frameLabelReach(zoom) {
+    return FRAME_LABEL_REACH / Math.min(zoom || 1, 1);
+}
+function barLayout(anchor, zoom) {
+    const y = anchor.y - frameLabelReach(zoom) - (BAR_GAP + BUTTON_SIZE / 2) / zoom;
+    const buttonCenterX = anchor.x + BUTTON_SIZE / 2 / zoom;
+    const trackStart = anchor.x + (BUTTON_SIZE + TRACK_GAP) / zoom;
+    const trackEnd = Math.max(anchor.x + anchor.width, trackStart + MIN_TRACK / zoom);
+    return { y, buttonCenterX, trackStart, trackEnd };
+}
+function progressAt(layout, x) {
+    const span = layout.trackEnd - layout.trackStart;
+    if (span <= 0)
+        return 0;
+    return Math.min(1, Math.max(0, (x - layout.trackStart) / span));
+}
+function knobX(layout, progress) {
+    return layout.trackStart + progress * (layout.trackEnd - layout.trackStart);
+}
+class TransportBar {
+    _ctx;
+    _styling;
+    _selection = null;
+    _playingRect = null;
+    _previewId = null;
+    _previewShape = "";
+    _zoom = 1;
+    _buttonHovered = false;
+    _knobHovered = false;
+    _hiddenForDrag = false;
+    _progress = 0;
+    _dragX = null;
+    _progressBeforeDrag = 0;
+    _shield = null;
+    _queue = Promise.resolve();
+    _dirty = false;
+    _syncing = false;
+    constructor(_ctx, _styling) {
+        this._ctx = _ctx;
+        this._styling = _styling;
+    }
+    get buttonId() {
+        return `${this._ctx.driverId}:transport-button`;
+    }
+    get knobId() {
+        return `${this._ctx.driverId}:transport-knob`;
+    }
+    get shieldId() {
+        return `${this._ctx.driverId}:transport-shield`;
+    }
+    get _trackId() {
+        return `${this._ctx.driverId}:transport-track`;
+    }
+    get _playedId() {
+        return `${this._ctx.driverId}:transport-played`;
+    }
+    get _hitId() {
+        return `${this._ctx.driverId}:transport-hit`;
+    }
+    get hitIds() {
+        return [this.buttonId, this.knobId, this.shieldId];
+    }
+    get trackIds() {
+        return [this._trackId, this._playedId, this._hitId];
+    }
+    get clickIds() {
+        return [this.buttonId, ...this.trackIds];
+    }
+    get ownIds() {
+        return [...this.hitIds, this._trackId, this._playedId];
+    }
+    get mode() {
+        return this._playingRect ? "stop" : "play";
+    }
+    get seedIds() {
+        return this._selection?.ids ?? [];
+    }
+    get isDragging() {
+        return this._dragX !== null;
+    }
+    setStyling(styling) {
+        this._styling = styling;
+        this._requestSync();
+    }
+    setZoom(zoom) {
+        if (zoom === this._zoom)
+            return;
+        this._zoom = zoom;
+        this._requestSync();
+    }
+    setButtonHovered(hovered) {
+        if (hovered === this._buttonHovered)
+            return;
+        this._buttonHovered = hovered;
+        this._requestSync();
+    }
+    setKnobHovered(hovered) {
+        if (hovered === this._knobHovered)
+            return;
+        this._knobHovered = hovered;
+        this._requestSync();
+    }
+    jumpTo(x) {
+        const anchor = this._anchor();
+        if (!anchor || this.isDragging)
+            return null;
+        this._progress = progressAt(barLayout(anchor, this._zoom), x);
+        this._requestSync();
+        return this._progress;
+    }
+    setProgress(progress) {
+        if (this.isDragging)
+            return;
+        const clamped = Math.min(1, Math.max(0, progress));
+        if (clamped === this._progress)
+            return;
+        this._progress = clamped;
+        this._requestSync();
+    }
+    async beginDrag(x) {
+        const anchor = this._anchor();
+        if (!anchor)
+            return;
+        const { rect: viewport } = unwrap(await this._ctx.issueCommand({
+            type: "command:camera:get-viewport-rect",
+            ...stamp(this._ctx),
+        }));
+        this._shield = {
+            x: viewport.x - viewport.width * SHIELD_REACH,
+            y: viewport.y - viewport.height * SHIELD_REACH,
+            width: viewport.width * (1 + SHIELD_REACH * 2),
+            height: viewport.height * (1 + SHIELD_REACH * 2),
+        };
+        this._progressBeforeDrag = this._progress;
+        this._dragX = x;
+        this._progress = progressAt(barLayout(anchor, this._zoom), x);
+        this._requestSync();
+    }
+    dragTo(x) {
+        const anchor = this._anchor();
+        if (!this.isDragging || !anchor)
+            return;
+        this._dragX = x;
+        this._progress = progressAt(barLayout(anchor, this._zoom), x);
+        this._requestSync();
+    }
+    endDrag() {
+        if (!this.isDragging)
+            return null;
+        this._dragX = null;
+        this._shield = null;
+        this._requestSync();
+        return this._progress;
+    }
+    cancelDrag() {
+        if (!this.isDragging)
+            return;
+        this._dragX = null;
+        this._shield = null;
+        this._progress = this._progressBeforeDrag;
+        this._requestSync();
+    }
+    setSelection(ids) {
+        this._enqueue(async () => {
+            this._hiddenForDrag = false;
+            this._selection = await this._selectionFor(ids);
+            this._requestSync();
+        });
+    }
+    refreshIfAffected(changedIds) {
+        const current = this._selection;
+        if (!current)
+            return;
+        const watched = new Set(current.ids);
+        if (!changedIds.some((id) => watched.has(id)))
+            return;
+        this.setSelection(current.ids);
+    }
+    hideWhileDragging() {
+        this._enqueue(async () => {
+            this._hiddenForDrag = true;
+            this._requestSync();
+        });
+    }
+    setPlaying(rect) {
+        this._enqueue(async () => {
+            this._playingRect = rect;
+            this._requestSync();
+        });
+    }
+    _enqueue(task) {
+        this._queue = this._queue.then(task).catch(() => undefined);
+    }
+    _requestSync() {
+        this._dirty = true;
+        if (this._syncing)
+            return;
+        void this._drain();
+    }
+    async _drain() {
+        this._syncing = true;
+        try {
+            while (this._dirty) {
+                this._dirty = false;
+                try {
+                    await this._sync();
+                }
+                catch {
+                    this._previewId = null;
+                    this._previewShape = "";
+                }
+            }
+        }
+        finally {
+            this._syncing = false;
+        }
+    }
+    async _selectionFor(ids) {
+        const frames = await sereneFramesAmong(this._ctx, ids);
+        if (frames.length !== 1)
+            return null;
+        const rect = elementBounds(frames[0]);
+        if (!rect || rect.width <= 0 || rect.height <= 0)
+            return null;
+        return { rect, ids: [frames[0].id] };
+    }
+    _anchor() {
+        if (this._playingRect)
+            return this._playingRect;
+        if (this._hiddenForDrag)
+            return null;
+        return this._selection?.rect ?? null;
+    }
+    _circle(id, centerX, centerY, size, seed) {
+        return {
+            type: "shape",
+            drawdyElementId: id,
+            componentType: "circle",
+            x: centerX - size / 2,
+            y: centerY - size / 2,
+            width: size,
+            height: size,
+            strokeColor: this._styling.background,
+            fillColor: this._styling.primary,
+            strokeWidth: 2 / this._zoom,
+            roughness: 0,
+            seed,
+        };
+    }
+    _line(id, fromX, toX, y, color, seed) {
+        return {
+            type: "line",
+            drawdyElementId: id,
+            color,
+            strokeWidth: TRACK_WIDTH / this._zoom,
+            roughness: 0,
+            seed,
+            from: [fromX, y],
+            to: [Math.max(toX, fromX + 0.5 / this._zoom), y],
+        };
+    }
+    _hitBox(id, rect, seed) {
+        return {
+            type: "shape",
+            drawdyElementId: id,
+            componentType: "rect",
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            strokeColor: "transparent",
+            fillColor: this._styling.primary,
+            strokeWidth: 0,
+            roughness: 0,
+            seed,
+            opacity: 0,
+        };
+    }
+    _elements(anchor) {
+        const layout = barLayout(anchor, this._zoom);
+        const buttonSize = (BUTTON_SIZE * (this._buttonHovered ? HOVER_SCALE : 1)) / this._zoom;
+        const knobSize = (this._knobHovered || this.isDragging ? KNOB_ACTIVE_SIZE : KNOB_SIZE) /
+            this._zoom;
+        const knobCenter = knobX(layout, this._progress);
+        const button = {
+            ...this._circle(this.buttonId, layout.buttonCenterX, layout.y, buttonSize, BUTTON_SEED),
+            text: this.mode === "play" ? "▶" : "■",
+            textColor: this._styling.primaryForeground,
+            fontSize: (BUTTON_SIZE * GLYPH_RATIO) / this._zoom,
+            textAlign: "center",
+            textVerticalAlign: "middle",
+        };
+        const hitHeight = TRACK_HIT_HEIGHT / this._zoom;
+        const elements = [
+            this._hitBox(this._hitId, {
+                x: layout.trackStart,
+                y: layout.y - hitHeight / 2,
+                width: layout.trackEnd - layout.trackStart,
+                height: hitHeight,
+            }, HIT_SEED),
+            button,
+            this._line(this._trackId, layout.trackStart, layout.trackEnd, layout.y, this._styling.border, TRACK_SEED),
+            this._line(this._playedId, layout.trackStart, knobCenter, layout.y, this._styling.primary, PLAYED_SEED),
+            this._circle(this.knobId, knobCenter, layout.y, knobSize, KNOB_SEED),
+        ];
+        if (this._shield) {
+            elements.push(this._hitBox(this.shieldId, this._shield, SHIELD_SEED));
+        }
+        return elements;
+    }
+    async _sync() {
+        const anchor = this._anchor();
+        if (!anchor) {
+            await this._remove();
+            return;
+        }
+        const elements = this._elements(anchor);
+        const shape = elements.map((el) => el.drawdyElementId).join(",");
+        if (this._previewId && shape === this._previewShape) {
+            await this._ctx.issueCommand({
+                type: "command:scene:update-drawdy-preview-elements",
+                ...stamp(this._ctx),
+                req: { elements },
+            });
+            return;
+        }
+        await this._remove();
+        const { previewId } = unwrap(await this._ctx.issueCommand({
+            type: "command:scene:create-drawdy-preview-elements",
+            ...stamp(this._ctx),
+            req: { elements, hitTestable: true },
+        }));
+        this._previewId = previewId;
+        this._previewShape = shape;
+    }
+    async _remove() {
+        const previewId = this._previewId;
+        this._previewId = null;
+        this._previewShape = "";
+        if (!previewId)
+            return;
+        await this._ctx.issueCommand({
+            type: "command:scene:delete-drawdy-preview-elements",
+            ...stamp(this._ctx),
+            req: { previewIds: [previewId] },
+        });
+    }
+}
+
+const SCENE_CHANGE_SUBSCRIPTIONS = [
+    "subscription:scene:elements-added",
+    "subscription:scene:elements-removed",
+    "subscription:scene:elements-updated",
+    "subscription:scene:elements-replaced",
+];
 let driver = null;
 const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
     let requestId = 0;
@@ -1777,8 +2705,10 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         nextRequestId: () => String(requestId++),
     };
     const playhead = new Playhead(ctx, styling);
-    const session = new SereneSession(ctx, playhead, styling);
-    driver = { ctx, session, styling };
+    const transport = new TransportBar(ctx, styling);
+    const session = new SereneSession(ctx, playhead, transport, styling);
+    driver = { ctx, session, transport, styling };
+    await session.restoreSettings();
     unwrap(await issueCommand({
         type: "command:dom:create-action-button",
         ...stamp(ctx),
@@ -1806,11 +2736,56 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         ...stamp(ctx),
     }));
     await registerMenus(ctx);
+    await subscribeTransport(ctx, transport);
 };
+async function subscribeTransport(ctx, transport) {
+    unwrap(await ctx.issueCommand({
+        type: "subscription:scene:drawdy-element-selection",
+        ...stamp(ctx),
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "subscription:scene:drawdy-elements-dragged",
+        ...stamp(ctx),
+    }));
+    for (const type of SCENE_CHANGE_SUBSCRIPTIONS) {
+        unwrap(await ctx.issueCommand({
+            type,
+            ...stamp(ctx),
+            req: { properties: FRAME_PROPERTIES },
+        }));
+    }
+    unwrap(await ctx.issueCommand({
+        type: "subscription:camera:moved-rapid",
+        ...stamp(ctx),
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "subscription:scene:click",
+        ...stamp(ctx),
+        req: { elementIds: transport.clickIds },
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "subscription:scene:pointer",
+        ...stamp(ctx),
+        req: { elementIds: transport.hitIds },
+    }));
+    const camera = unwrap(await ctx.issueCommand({
+        type: "command:camera:get-info",
+        ...stamp(ctx),
+    }));
+    transport.setZoom(camera.zoom);
+    await syncTransportWithSelection(ctx, transport);
+}
+async function syncTransportWithSelection(ctx, transport) {
+    const { drawdyElementIds } = unwrap(await ctx.issueCommand({
+        type: "command:scene:get-current-selected-drawdy-elements",
+        ...stamp(ctx),
+    }));
+    transport.setSelection(drawdyElementIds.filter((id) => !transport.ownIds.includes(id)));
+}
 const onEvent = async (event) => {
     if (!driver)
         return;
-    const { ctx, session } = driver;
+    const { ctx, session, transport } = driver;
     switch (event.type) {
         case "subscription:context-menu:clicked": {
             if (event.body.menuId === playMenuId(ctx.driverId)) {
@@ -1824,13 +2799,103 @@ const onEvent = async (event) => {
         }
         case "subscription:scene:pointer-position": {
             session.setPointer(event.body.position.canvasSpace);
+            if (transport.isDragging) {
+                transport.dragTo(event.body.position.canvasSpace.x);
+            }
+            return;
+        }
+        case "subscription:scene:drawdy-element-selection": {
+            const ids = event.body.drawdyElementIds;
+            const foreign = ids.filter((id) => !transport.ownIds.includes(id));
+            if (foreign.length === 0 && ids.length > 0)
+                return;
+            transport.setSelection(foreign);
+            return;
+        }
+        case "subscription:scene:drawdy-elements-dragged": {
+            if (event.body.type === "dragStart")
+                transport.hideWhileDragging();
+            if (event.body.type === "dragEnd") {
+                await syncTransportWithSelection(ctx, transport);
+            }
+            return;
+        }
+        case "subscription:scene:elements-added":
+        case "subscription:scene:elements-removed":
+        case "subscription:scene:elements-updated":
+        case "subscription:scene:elements-replaced": {
+            const changed = [
+                ...event.body.drawdyElements,
+                ...(event.type === "subscription:scene:elements-replaced"
+                    ? event.body.replaced
+                    : []),
+            ];
+            if (event.type !== "subscription:scene:elements-updated" && changed.some(isSereneFrame)) {
+                await session.postFrames();
+            }
+            transport.refreshIfAffected(changed.map((el) => el.id));
+            session.onSceneChanged(changed);
+            return;
+        }
+        case "subscription:camera:moved-rapid": {
+            transport.setZoom(event.body.zoom);
+            return;
+        }
+        case "subscription:scene:pointer": {
+            const body = event.body;
+            if (body.type === "cancel") {
+                transport.cancelDrag();
+                transport.setButtonHovered(false);
+                transport.setKnobHovered(false);
+                return;
+            }
+            const ids = body.drawdyElementIds;
+            if (body.type === "down") {
+                if (ids.includes(transport.knobId)) {
+                    await transport.beginDrag(body.cursor.canvasSpace.x);
+                }
+                return;
+            }
+            if (body.type === "up") {
+                const progress = transport.endDrag();
+                if (progress !== null)
+                    session.seek(progress);
+                return;
+            }
+            const entering = body.type === "enter";
+            if (ids.includes(transport.buttonId)) {
+                transport.setButtonHovered(entering);
+            }
+            if (ids.includes(transport.knobId)) {
+                transport.setKnobHovered(entering);
+            }
+            return;
+        }
+        case "subscription:scene:click": {
+            if (transport.isDragging)
+                return;
+            const clicked = event.body.drawdyElementIds;
+            if (clicked.includes(transport.knobId))
+                return;
+            if (clicked.some((id) => transport.trackIds.includes(id))) {
+                const progress = transport.jumpTo(event.body.cursor.canvasSpace.x);
+                if (progress !== null)
+                    session.seek(progress);
+                return;
+            }
+            if (!clicked.includes(transport.buttonId))
+                return;
+            if (transport.mode === "stop") {
+                await session.stop();
+                return;
+            }
+            await session.play(transport.seedIds);
             return;
         }
         case "subscription:dom:element-clicked": {
             if (event.body.domElementId !== actionButtonId(ctx.driverId))
                 return;
-            await session.openPanel();
-            session.postTheme();
+            await session.openFromRail();
             return;
         }
         case "subscription:webview:message": {
