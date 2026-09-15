@@ -40,7 +40,6 @@ export class SereneSession {
     private _laser: Ink[] = [];
     private _elementCount = 0;
     private _settings: SereneSettings = DEFAULT_SETTINGS;
-    private _pointer: { x: number; y: number } | null = null;
     private _pendingAutoplay = false;
     private _frameIds: string[] = [];
     private _playing = false;
@@ -64,10 +63,6 @@ export class SereneSession {
 
     public postSettings(): void {
         postToPanel(this._ctx, { type: "settings", values: this._settings });
-    }
-
-    public setPointer(pointer: { x: number; y: number }): void {
-        this._pointer = pointer;
     }
 
     public setStyling(styling: ModuleStyling): void {
@@ -128,7 +123,7 @@ export class SereneSession {
     }
 
     private async _resolve(seedIds: string[]): Promise<boolean> {
-        const target = await resolveTarget(this._ctx, this._pointer, seedIds);
+        const target = await resolveTarget(this._ctx, seedIds);
         if (!target) {
             this._rect = null;
             this._frameIds = [];

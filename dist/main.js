@@ -11,27 +11,6 @@ function unwrap(response) {
     return value;
 }
 
-const playMenuId = (driverId) => `${driverId}:play`;
-const stopMenuId = (driverId) => `${driverId}:stop`;
-async function registerMenus(ctx) {
-    const menus = [
-        { menuId: playMenuId(ctx.driverId), menuTitle: "Serene play" },
-        { menuId: stopMenuId(ctx.driverId), menuTitle: "Serene stop" },
-    ];
-    for (const menu of menus) {
-        unwrap(await ctx.issueCommand({
-            type: "command:context-menu:add",
-            ...stamp(ctx),
-            req: menu,
-        }));
-        unwrap(await ctx.issueCommand({
-            type: "subscription:context-menu:clicked",
-            ...stamp(ctx),
-            req: { menuId: menu.menuId },
-        }));
-    }
-}
-
 const SCALES = [
     {
         id: "major-pentatonic",
@@ -1915,15 +1894,6 @@ function combineRects(rects) {
         return null;
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
-function rectContainsPoint(rect, x, y) {
-    return (x >= rect.x &&
-        x <= rect.x + rect.width &&
-        y >= rect.y &&
-        y <= rect.y + rect.height);
-}
-function rectArea(rect) {
-    return Math.max(0, rect.width) * Math.max(0, rect.height);
-}
 function monotonicRuns(line) {
     if (line.length < 2)
         return [];
@@ -2531,7 +2501,6 @@ const INK_PROPERTIES = [
     "rotation",
     "opacity",
 ];
-const HIT_PAD = 8;
 const STAGE_TOLERANCE = 1;
 function encloses(outer, inner) {
     return (inner.x >= outer.x - STAGE_TOLERANCE &&
@@ -2578,47 +2547,20 @@ function boundsUnion(elements) {
         .filter((r) => r !== null);
     return combineRects(rects);
 }
-function smallestFrameUnder(frames, pointer) {
-    let smallest = null;
-    let smallestArea = Infinity;
-    for (const frame of frames) {
-        const bounds = elementBounds(frame);
-        if (!bounds || !rectContainsPoint(bounds, pointer.x, pointer.y))
-            continue;
-        const area = rectArea(bounds);
-        if (area < smallestArea) {
-            smallestArea = area;
-            smallest = frame;
-        }
-    }
-    return smallest;
-}
-async function seedFrameIds(ctx, pointer, explicit) {
+async function seedFrameIds(ctx, explicit) {
     if (explicit.length > 0)
         return explicit;
     const { drawdyElementIds } = unwrap(await ctx.issueCommand({
         type: "command:scene:get-current-selected-drawdy-elements",
         ...stamp(ctx),
     }));
-    if (drawdyElementIds.length > 0) {
-        const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
-        const frames = selected.filter(isSereneFrame).map((el) => el.id);
-        if (frames.length > 0)
-            return frames;
-    }
-    if (!pointer)
+    if (drawdyElementIds.length === 0)
         return [];
-    const hits = await elementsInRect(ctx, {
-        x: pointer.x - HIT_PAD,
-        y: pointer.y - HIT_PAD,
-        width: HIT_PAD * 2,
-        height: HIT_PAD * 2,
-    }, FRAME_PROPERTIES);
-    const frame = smallestFrameUnder(hits.filter(isSereneFrame), pointer);
-    return frame ? [frame.id] : [];
+    const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
+    return selected.filter(isSereneFrame).map((el) => el.id);
 }
-async function resolveRegion(ctx, pointer, explicit) {
-    const stageIds = await seedFrameIds(ctx, pointer, explicit);
+async function resolveRegion(ctx, explicit) {
+    const stageIds = await seedFrameIds(ctx, explicit);
     if (stageIds.length === 0)
         return null;
     const frames = await elementsByIds(ctx, stageIds, FRAME_PROPERTIES);
@@ -2627,8 +2569,8 @@ async function resolveRegion(ctx, pointer, explicit) {
         return null;
     return { rect, stageIds };
 }
-async function resolveTarget(ctx, pointer, explicit = []) {
-    const region = await resolveRegion(ctx, pointer, explicit);
+async function resolveTarget(ctx, explicit = []) {
+    const region = await resolveRegion(ctx, explicit);
     if (!region)
         return null;
     const inRegion = (await elementsInRect(ctx, region.rect, INK_PROPERTIES)).filter((el) => el.type !== "frame");
@@ -2753,7 +2695,6 @@ class SereneSession {
     _laser = [];
     _elementCount = 0;
     _settings = DEFAULT_SETTINGS;
-    _pointer = null;
     _pendingAutoplay = false;
     _frameIds = [];
     _playing = false;
@@ -2773,9 +2714,6 @@ class SereneSession {
     }
     postSettings() {
         postToPanel(this._ctx, { type: "settings", values: this._settings });
-    }
-    setPointer(pointer) {
-        this._pointer = pointer;
     }
     setStyling(styling) {
         this._styling = styling;
@@ -2828,7 +2766,7 @@ class SereneSession {
         });
     }
     async _resolve(seedIds) {
-        const target = await resolveTarget(this._ctx, this._pointer, seedIds);
+        const target = await resolveTarget(this._ctx, seedIds);
         if (!target) {
             this._rect = null;
             this._frameIds = [];
@@ -3430,7 +3368,6 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         type: "subscription:scene:pointer-position",
         ...stamp(ctx),
     }));
-    await registerMenus(ctx);
     await subscribeTransport(ctx, transport);
 };
 async function subscribeTransport(ctx, transport) {
@@ -3486,18 +3423,7 @@ const onEvent = async (event) => {
         return;
     const { ctx, session, transport } = driver;
     switch (event.type) {
-        case "subscription:context-menu:clicked": {
-            if (event.body.menuId === playMenuId(ctx.driverId)) {
-                await session.play();
-                return;
-            }
-            if (event.body.menuId === stopMenuId(ctx.driverId)) {
-                await session.stop();
-            }
-            return;
-        }
         case "subscription:scene:pointer-position": {
-            session.setPointer(event.body.position.canvasSpace);
             if (transport.isDragging) {
                 transport.dragTo(event.body.position.canvasSpace.x);
             }

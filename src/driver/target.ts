@@ -2,7 +2,7 @@ import {
     SubscribeableKey,
     SubscribedDrawdyElement,
 } from "@drawdy/driver-protocol";
-import { Rect, combineRects, rectArea, rectContainsPoint } from "../score/geometry";
+import { Rect, combineRects } from "../score/geometry";
 import { elementBounds } from "../score/ink";
 import { Ctx, stamp, unwrap } from "./context";
 import { FRAME_PROPERTIES, isSereneFrame } from "./frames";
@@ -18,8 +18,6 @@ export const INK_PROPERTIES: SubscribeableKey[] = [
     "rotation",
     "opacity",
 ];
-
-const HIT_PAD = 8;
 
 const STAGE_TOLERANCE = 1;
 
@@ -95,27 +93,8 @@ function boundsUnion(elements: SubscribedDrawdyElement[]): Rect | null {
     return combineRects(rects);
 }
 
-function smallestFrameUnder(
-    frames: SubscribedDrawdyElement[],
-    pointer: { x: number; y: number }
-): SubscribedDrawdyElement | null {
-    let smallest: SubscribedDrawdyElement | null = null;
-    let smallestArea = Infinity;
-    for (const frame of frames) {
-        const bounds = elementBounds(frame);
-        if (!bounds || !rectContainsPoint(bounds, pointer.x, pointer.y)) continue;
-        const area = rectArea(bounds);
-        if (area < smallestArea) {
-            smallestArea = area;
-            smallest = frame;
-        }
-    }
-    return smallest;
-}
-
 async function seedFrameIds(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null,
     explicit: string[]
 ): Promise<string[]> {
     if (explicit.length > 0) return explicit;
@@ -126,35 +105,18 @@ async function seedFrameIds(
             ...stamp(ctx),
         })
     );
-    if (drawdyElementIds.length > 0) {
-        const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
-        const frames = selected.filter(isSereneFrame).map((el) => el.id);
-        if (frames.length > 0) return frames;
-    }
-    if (!pointer) return [];
-
-    const hits = await elementsInRect(
-        ctx,
-        {
-            x: pointer.x - HIT_PAD,
-            y: pointer.y - HIT_PAD,
-            width: HIT_PAD * 2,
-            height: HIT_PAD * 2,
-        },
-        FRAME_PROPERTIES
-    );
-    const frame = smallestFrameUnder(hits.filter(isSereneFrame), pointer);
-    return frame ? [frame.id] : [];
+    if (drawdyElementIds.length === 0) return [];
+    const selected = await elementsByIds(ctx, drawdyElementIds, FRAME_PROPERTIES);
+    return selected.filter(isSereneFrame).map((el) => el.id);
 }
 
 type Region = { rect: Rect; stageIds: string[] };
 
 async function resolveRegion(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null,
     explicit: string[]
 ): Promise<Region | null> {
-    const stageIds = await seedFrameIds(ctx, pointer, explicit);
+    const stageIds = await seedFrameIds(ctx, explicit);
     if (stageIds.length === 0) return null;
 
     const frames = await elementsByIds(ctx, stageIds, FRAME_PROPERTIES);
@@ -166,10 +128,9 @@ async function resolveRegion(
 
 export async function resolveTarget(
     ctx: Ctx,
-    pointer: { x: number; y: number } | null,
     explicit: string[] = []
 ): Promise<Target | null> {
-    const region = await resolveRegion(ctx, pointer, explicit);
+    const region = await resolveRegion(ctx, explicit);
     if (!region) return null;
 
     const inRegion = (

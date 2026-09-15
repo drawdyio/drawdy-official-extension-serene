@@ -46,9 +46,7 @@ width, with a knob that follows playback. Press the button to play the frame;
 while it plays it turns into a stop button and the bar stays pinned to the
 frame being played. Click anywhere on the track to jump there, or drag the knob; a drag lands when you release,
 whether the frame is playing or paused, and the voices under the new position
-pick up mid-note without a fresh attack. The right-click menu still
-offers **Serene play** and **Serene stop** for a selected Serene frame, or for
-the Serene frame under the cursor.
+pick up mid-note without a fresh attack.
 
 ## What gets played
 
@@ -159,8 +157,7 @@ clipped samples unlimited, and 0.796 with none through the limiter.
 Audio lives in the panel's webview, which runs in a sandboxed opaque-origin
 iframe. Browsers require one real click inside that frame before a page may
 make sound, so the first play has to come from the panel's ▶ button. After
-that, the on-canvas play button and `Serene play` from the context menu start
-playback on their own.
+that, the on-canvas play button starts playback on its own.
 
 ## Develop
 

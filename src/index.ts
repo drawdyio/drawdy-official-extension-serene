@@ -1,6 +1,5 @@
 import { DriverModule, ModuleStyling } from "@drawdy/driver-protocol";
 import { Ctx, stamp, unwrap } from "./driver/context";
-import { playMenuId, registerMenus, stopMenuId } from "./driver/menu";
 import {
     ACTION_BUTTON_SVG,
     PanelToDriver,
@@ -82,7 +81,6 @@ export const activate: DriverModule["activate"] = async ({
         })
     );
 
-    await registerMenus(ctx);
     await subscribeTransport(ctx, transport);
 };
 
@@ -167,18 +165,7 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
     const { ctx, session, transport } = driver;
 
     switch (event.type) {
-        case "subscription:context-menu:clicked": {
-            if (event.body.menuId === playMenuId(ctx.driverId)) {
-                await session.play();
-                return;
-            }
-            if (event.body.menuId === stopMenuId(ctx.driverId)) {
-                await session.stop();
-            }
-            return;
-        }
         case "subscription:scene:pointer-position": {
-            session.setPointer(event.body.position.canvasSpace);
             if (transport.isDragging) {
                 transport.dragTo(event.body.position.canvasSpace.x);
             }
