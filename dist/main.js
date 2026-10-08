@@ -11,6 +11,317 @@ function unwrap(response) {
     return value;
 }
 
+function rotatePoint(p, cx, cy, angle) {
+    if (angle === 0)
+        return [p[0], p[1]];
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const dx = p[0] - cx;
+    const dy = p[1] - cy;
+    return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+}
+function rotatePolyline(points, cx, cy, angle) {
+    if (angle === 0)
+        return points;
+    return points.map((p) => rotatePoint(p, cx, cy, angle));
+}
+function combineRects(rects) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const r of rects) {
+        if (r.width < 0 || r.height < 0)
+            continue;
+        minX = Math.min(minX, r.x);
+        minY = Math.min(minY, r.y);
+        maxX = Math.max(maxX, r.x + r.width);
+        maxY = Math.max(maxY, r.y + r.height);
+    }
+    if (!isFinite(minX))
+        return null;
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+function monotonicRuns(line) {
+    if (line.length < 2)
+        return [];
+    const runs = [];
+    let current = [line[0]];
+    let direction = 0;
+    for (let i = 1; i < line.length; i++) {
+        const dx = line[i][0] - line[i - 1][0];
+        const sign = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+        if (sign !== 0 && direction !== 0 && sign !== direction) {
+            runs.push(current);
+            current = [line[i - 1]];
+            direction = sign;
+        }
+        else if (direction === 0) {
+            direction = sign;
+        }
+        current.push(line[i]);
+    }
+    runs.push(current);
+    return runs
+        .filter((run) => run.length >= 2)
+        .map((run) => run[run.length - 1][0] < run[0][0] ? [...run].reverse() : run);
+}
+function evenPick(items, keep) {
+    if (items.length <= keep)
+        return items;
+    if (keep <= 1)
+        return [items[0]];
+    const out = [];
+    for (let i = 0; i < keep; i++) {
+        out.push(items[Math.round((i * (items.length - 1)) / (keep - 1))]);
+    }
+    return out;
+}
+function rectsOverlap(a, b) {
+    return (a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y);
+}
+
+const ELLIPSE_SEGMENTS = 48;
+const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
+function elementGlides(el) {
+    return (el.type === "freedraw" ||
+        STROKE_COMPONENT_TYPES.has(el.componentType ?? ""));
+}
+const OPACITY_CURVE = 2;
+function elementGain(el) {
+    const opacity = el.opacity;
+    if (typeof opacity !== "number" || !Number.isFinite(opacity))
+        return 1;
+    return Math.pow(Math.min(1, Math.max(0, opacity)), OPACITY_CURVE);
+}
+function elementBounds(el) {
+    const { x, y, width, height } = el;
+    if (x == null || y == null || width == null || height == null)
+        return null;
+    return { x, y, width, height };
+}
+function closed(points) {
+    if (points.length < 2)
+        return points;
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (first[0] === last[0] && first[1] === last[1])
+        return points;
+    return [...points, [first[0], first[1]]];
+}
+function rectOutline(r) {
+    return closed([
+        [r.x, r.y],
+        [r.x + r.width, r.y],
+        [r.x + r.width, r.y + r.height],
+        [r.x, r.y + r.height],
+    ]);
+}
+function diamondOutline(r) {
+    return closed([
+        [r.x + r.width / 2, r.y],
+        [r.x + r.width, r.y + r.height / 2],
+        [r.x + r.width / 2, r.y + r.height],
+        [r.x, r.y + r.height / 2],
+    ]);
+}
+function ellipseOutline(r) {
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const out = [];
+    for (let i = 0; i <= ELLIPSE_SEGMENTS; i++) {
+        const t = (i / ELLIPSE_SEGMENTS) * Math.PI * 2;
+        out.push([
+            cx + (r.width / 2) * Math.cos(t),
+            cy + (r.height / 2) * Math.sin(t),
+        ]);
+    }
+    return out;
+}
+function shapeOutline(componentType, r) {
+    switch (componentType) {
+        case "rect":
+            return rectOutline(r);
+        case "diamond":
+            return diamondOutline(r);
+        case "circle":
+            return ellipseOutline(r);
+        default:
+            return null;
+    }
+}
+function elementLines(el) {
+    if (el.type === "frame")
+        return [];
+    const bounds = elementBounds(el);
+    const rotation = el.rotation ?? 0;
+    const center = bounds
+        ? [bounds.x + bounds.width / 2, bounds.y + bounds.height / 2]
+        : null;
+    const spin = (points) => center ? rotatePolyline(points, center[0], center[1], rotation) : points;
+    if (el.type === "freedraw") {
+        const points = el.points;
+        if (!points || points.length < 2)
+            return [];
+        return [points.map(([x, y]) => [x, y])];
+    }
+    if (STROKE_COMPONENT_TYPES.has(el.componentType ?? "")) {
+        const points = el.points;
+        if (!points || points.length < 2)
+            return [];
+        return [spin(points.map(([x, y]) => [x, y]))];
+    }
+    if (!bounds || bounds.width < 0 || bounds.height < 0)
+        return [];
+    const outline = shapeOutline(el.componentType, bounds);
+    if (outline)
+        return [spin(outline)];
+    return [spin(rectOutline(bounds))];
+}
+function elementInk(el) {
+    const gain = elementGain(el);
+    const glide = elementGlides(el);
+    return elementLines(el)
+        .filter((line) => line.length >= 2)
+        .map((points) => ({ points, gain, glide }));
+}
+function sceneInk(elements) {
+    return elements.flatMap(elementInk);
+}
+function laserInk(strokes) {
+    return strokes
+        .filter((stroke) => stroke.length >= 2)
+        .map((stroke) => ({
+        points: stroke.map(([x, y]) => [x, y]),
+        gain: 1,
+        glide: true,
+    }));
+}
+
+/** Screen-pixel metrics of the board overlay; divide by zoom for canvas units. */
+const BOARD = {
+    barHeight: 32,
+    barGap: 8,
+    majorTick: 10,
+    minorTick: 5,
+    tickLabelTop: 10,
+    tickLabelInset: 5,
+    tickLabelEdge: 20,
+    minTickSpacing: 6,
+    minLabelSpacing: 32,
+    noteInset: 8,
+    noteTopClear: 32,
+    noteBottomClear: 10,
+    noteLineHeight: 16,
+    noteMinSpacing: 16,
+    handleWidth: 12,
+    handleHeight: 20,
+    handleAbove: 4,
+};
+const LABEL_STEPS = [1, 2, 5, 10, 15, 30, 60];
+function formatClock(sec) {
+    const tenths = Math.round(Math.max(0, sec) * 10);
+    const minutes = Math.floor(tenths / 600);
+    const rest = (tenths - minutes * 600) / 10;
+    return `${minutes}:${rest < 10 ? "0" : ""}${rest.toFixed(1)}`;
+}
+/**
+ * Ticks every 0.5 s of real time, none at 0; whole seconds are emphasized and
+ * labeled. When zoomed out, sparser ticks and labels keep them legible.
+ */
+function rulerTicks(width, pxPerSecond, zoom) {
+    const secondPx = pxPerSecond * zoom;
+    if (secondPx <= 0 || width <= 0)
+        return [];
+    const labelStep = LABEL_STEPS.find((step) => step * secondPx >= BOARD.minLabelSpacing) ??
+        LABEL_STEPS[LABEL_STEPS.length - 1];
+    const halves = 0.5 * secondPx >= BOARD.minTickSpacing;
+    const minorStep = halves ? 0.5 : secondPx >= BOARD.minTickSpacing ? 1 : labelStep;
+    const ticks = [];
+    for (let n = 1;; n++) {
+        const t = n * minorStep;
+        const x = t * pxPerSecond;
+        if (x >= width - 0.5 / zoom)
+            break;
+        const whole = Math.abs(t - Math.round(t)) < 1e-6;
+        const labeled = whole &&
+            Math.round(t) % labelStep === 0 &&
+            (width - x) * zoom > BOARD.tickLabelEdge;
+        ticks.push({
+            x,
+            major: whole && halves,
+            label: labeled ? `${Math.round(t)}s` : null,
+        });
+    }
+    return ticks;
+}
+/**
+ * One label per C within the range, at the height its pitch row plays,
+ * nudged clear of the ruler and the bottom edge, dropping any that crowd.
+ */
+function noteLabels(rect, lowOctave, highOctave, stepsPerOctave, zoom) {
+    const span = highOctave - lowOctave;
+    const rows = stepsPerOctave * span + 1;
+    const line = BOARD.noteLineHeight / zoom;
+    const minTop = rect.y + BOARD.noteTopClear / zoom;
+    const maxTop = rect.y + rect.height - BOARD.noteBottomClear / zoom - line;
+    if (maxTop < minTop || rows <= 0)
+        return [];
+    const labels = [];
+    for (let k = span; k >= 0; k--) {
+        const row = k * stepsPerOctave;
+        const center = rect.y + rect.height * (1 - (row + 0.5) / rows);
+        const top = Math.min(maxTop, Math.max(minTop, center - line / 2));
+        const previous = labels[labels.length - 1];
+        if (previous && (top - previous.top) * zoom < BOARD.noteMinSpacing)
+            continue;
+        labels.push({ label: `C${lowOctave + k}`, top });
+    }
+    return labels;
+}
+const BAR_MIN_SCALE = 0.85;
+// Average advance of Google Sans, in em; a little generous so
+// an estimate never runs short of the text it backs.
+const CHAR_EM = 0.56;
+function estimateTextWidth(text, fontPx) {
+    return text.length * fontPx * CHAR_EM;
+}
+/** Frame-anchored text keeps its size when zoomed in and shrinks with zoom out, to 85%. */
+function barScale(zoom) {
+    return Math.min(1, Math.max(BAR_MIN_SCALE, zoom));
+}
+/**
+ * The frame bar shrinks with zoom and never runs wider than its frame: it
+ * drops the time, then shortens the name, then shows only the icon, and hides
+ * when even that does not fit. Widths are screen px.
+ */
+function fitBar(name, time, frameWidth, zoom) {
+    const scale = barScale(zoom);
+    const pad = 8 * scale;
+    const icon = 20 * scale;
+    const gap = 8 * scale;
+    const font = 13 * scale;
+    const base = pad * 2 + icon;
+    const nameWidth = estimateTextWidth(name, font);
+    const full = base + gap + nameWidth + gap + estimateTextWidth(time, font);
+    if (full <= frameWidth)
+        return { scale, name, time, width: full };
+    if (base + gap + nameWidth <= frameWidth) {
+        return { scale, name, time: null, width: base + gap + nameWidth };
+    }
+    const chars = Math.floor((frameWidth - base - gap) / (font * CHAR_EM)) - 1;
+    if (chars >= 3) {
+        const short = `${name.slice(0, chars).trimEnd()}\u2026`;
+        return { scale, name: short, time: null, width: base + gap + estimateTextWidth(short, font) };
+    }
+    if (base <= frameWidth)
+        return { scale, name: null, time: null, width: base };
+    return null;
+}
+
 const SCALES = [
     {
         id: "major-pentatonic",
@@ -789,6 +1100,20 @@ button.section-head { cursor: pointer; }
 .frame-text { flex: 1; min-width: 0; }
 .frame-name { display: flex; align-items: center; gap: 6px; }
 .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-input {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: -2px 0 -2px -4px;
+    padding: 0 4px;
+    font: inherit;
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+}
+.name-input:focus-visible, .name-input:focus { box-shadow: 0 0 0 2px var(--ring); }
 .frame-dur { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .eq { display: none; align-items: flex-end; gap: 1.5px; height: 10px; }
 .frame-row.playing .eq { display: inline-flex; }
@@ -2310,7 +2635,7 @@ button.section-head { cursor: pointer; }
         text.innerHTML =
             '<div class="frame-name"><span class="name-text"></span><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></div>' +
             '<div class="frame-dur"></div>';
-        text.querySelector(".name-text").textContent = frame.name;
+        bindName(text.querySelector(".name-text"), frame);
         row.appendChild(text);
 
         var play = document.createElement("button");
@@ -2319,11 +2644,18 @@ button.section-head { cursor: pointer; }
         row.appendChild(play);
 
         row.addEventListener("click", function (event) {
-            if (event.target.closest(".play")) return;
+            // The second click of a double-click on the name starts a rename instead.
+            if (event.target.closest(".play, .name-input") || event.detail > 1) return;
             api.postMessage({ type: "focus-frame", id: frame.id });
         });
         row.addEventListener("keydown", function (event) {
-            if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+            if (event.target !== row) return;
+            if (event.key === "F2") {
+                event.preventDefault();
+                startRename(frame.id);
+                return;
+            }
+            if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             api.postMessage({ type: "focus-frame", id: frame.id });
         });
@@ -2331,6 +2663,90 @@ button.section-head { cursor: pointer; }
             playFrame(frame.id);
         });
         return row;
+    }
+
+    function bindName(el, frame) {
+        el.textContent = frame.name;
+        el.addEventListener("dblclick", function (event) {
+            event.stopPropagation();
+            startRename(frame.id);
+        });
+        bindTip(el, function () { return editing ? "" : "Double-click to rename"; });
+    }
+
+    function frameById(id) {
+        for (var i = 0; i < frames.length; i++) if (frames[i].id === id) return frames[i];
+        return null;
+    }
+
+    function rowById(id) {
+        var rows = frameList.children;
+        for (var i = 0; i < rows.length; i++) if (rows[i].dataset.id === id) return rows[i];
+        return null;
+    }
+
+    // Rename in place: Enter or blur saves, Esc cancels, an empty name is ignored.
+    var editing = null;
+    var pendingRenameId = null;
+
+    function startRename(id, draft) {
+        var frame = frameById(id);
+        var row = rowById(id);
+        if (!frame || !row) {
+            pendingRenameId = id;
+            return;
+        }
+        pendingRenameId = null;
+        if (editing && editing.id === id) {
+            editing.input.focus();
+            return;
+        }
+        if (editing) editing.finish(true);
+        hideTip();
+        var nameEl = row.querySelector(".name-text");
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "name-input";
+        input.maxLength = 60;
+        input.spellcheck = false;
+        input.setAttribute("aria-label", "Frame name");
+        input.value = draft === undefined ? frame.name : draft;
+        nameEl.replaceWith(input);
+        var done = false;
+        function finish(commit, refocus) {
+            if (done) return;
+            done = true;
+            editing = null;
+            var next = input.value.trim();
+            if (commit && next && next !== frame.name) {
+                frame.name = next;
+                api.postMessage({ type: "rename-frame", id: id, name: next });
+            }
+            if (!input.isConnected) return;
+            var span = document.createElement("span");
+            span.className = "name-text";
+            bindName(span, frame);
+            input.replaceWith(span);
+            renderRowStates();
+            if (refocus) row.focus({ preventScroll: true });
+        }
+        editing = { id: id, input: input, finish: finish, drop: function () { done = true; editing = null; } };
+        input.addEventListener("keydown", function (event) {
+            event.stopPropagation();
+            if (event.key === "Enter") {
+                event.preventDefault();
+                finish(true, true);
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                finish(false, true);
+            }
+        });
+        input.addEventListener("blur", function () { finish(true); });
+        input.addEventListener("click", function (event) { event.stopPropagation(); });
+        input.addEventListener("dblclick", function (event) { event.stopPropagation(); });
+        input.focus({ preventScroll: true });
+        if (draft === undefined) input.select();
+        row.scrollIntoView({ block: "nearest" });
     }
 
     function playFrame(id) {
@@ -2378,6 +2794,9 @@ button.section-head { cursor: pointer; }
         var focusRow = active && active.closest ? active.closest(".frame-row") : null;
         var focusId = focusRow ? focusRow.dataset.id : null;
         var focusPlay = Boolean(focusRow) && active.classList.contains("play");
+        // A list refresh rebuilds the rows; carry an unfinished rename across it.
+        var draft = editing ? { id: editing.id, value: editing.input.value } : null;
+        if (editing) editing.drop();
         frameList.textContent = "";
         frames.forEach(function (frame) {
             frameList.appendChild(buildRow(frame));
@@ -2389,6 +2808,8 @@ button.section-head { cursor: pointer; }
                 (focusPlay ? row.querySelector(".play") : row).focus({ preventScroll: true });
             });
         }
+        if (draft) startRename(draft.id, draft.value);
+        else if (pendingRenameId) startRename(pendingRenameId);
         if (any) layoutSliders();
     }
 
@@ -2465,6 +2886,9 @@ button.section-head { cursor: pointer; }
             case "frames":
                 frames = msg.frames;
                 renderFrames();
+                return;
+            case "edit-frame-name":
+                startRename(msg.id);
                 return;
             case "selection":
                 selectedIds = msg.ids;
@@ -2568,125 +2992,62 @@ function postToPanel(ctx, message) {
     });
 }
 
-const PLAYHEAD_WIDTH = 2;
-const REGION_SEED = 7;
-const LINE_SEED = 11;
-class Playhead {
+const RANGE_PREVIEW_HOLD_MS = 600;
+const MAX_NAME_CHARS = 28;
+const EMPTY_MIN_WIDTH = 300;
+const EMPTY_MIN_HEIGHT = 140;
+const IDLE_PLAYHEAD_OPACITY = 0.4;
+const TERTIARY_OPACITY = 0.5;
+const EMPTY_HALF_HEIGHT = 31;
+// Text boxes at least this tall sit at their top whatever the host's line height.
+const LABEL_BOX = 24;
+function truncate(name) {
+    return name.length > MAX_NAME_CHARS ? `${name.slice(0, MAX_NAME_CHARS - 1)}…` : name;
+}
+/** One preview batch: updated in place while its element ids stay the same. */
+class PreviewBatch {
     _ctx;
-    _styling;
+    _hitTestable;
     _previewId = null;
-    _rect = null;
-    _inFlight = false;
-    _pendingX = null;
-    _lastX = null;
-    constructor(_ctx, _styling) {
+    _shape = "";
+    _sent = "";
+    constructor(_ctx, _hitTestable = false) {
         this._ctx = _ctx;
-        this._styling = _styling;
+        this._hitTestable = _hitTestable;
     }
-    setStyling(styling) {
-        this._styling = styling;
-        const rect = this._rect;
-        if (!this._previewId || !rect)
+    async sync(elements) {
+        if (elements.length === 0) {
+            await this.clear();
             return;
-        void this._ctx.issueCommand({
-            type: "command:scene:update-drawdy-preview-elements",
-            ...stamp(this._ctx),
-            req: {
-                elements: [
-                    this._regionSchema(rect),
-                    this._lineSchema(rect, this._lastX ?? rect.x),
-                ],
-            },
-        });
-    }
-    get _lineId() {
-        return `${this._ctx.driverId}:playhead-line`;
-    }
-    get _regionId() {
-        return `${this._ctx.driverId}:playhead-region`;
-    }
-    _lineSchema(rect, x) {
-        return {
-            type: "line",
-            drawdyElementId: this._lineId,
-            color: this._styling.primary,
-            strokeWidth: PLAYHEAD_WIDTH,
-            roughness: 0,
-            seed: LINE_SEED,
-            from: [x, rect.y],
-            to: [x, rect.y + rect.height],
-        };
-    }
-    _regionSchema(rect) {
-        return {
-            type: "shape",
-            drawdyElementId: this._regionId,
-            componentType: "rect",
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            strokeColor: this._styling.border,
-            fillColor: "transparent",
-            strokeWidth: 1,
-            strokeDash: "dashed",
-            cornerRadius: 0,
-            roughness: 0,
-            seed: REGION_SEED,
-            opacity: 0.7,
-        };
-    }
-    async show(rect) {
-        await this.hide();
-        const { previewId } = unwrap(await this._ctx.issueCommand({
-            type: "command:scene:create-drawdy-preview-elements",
-            ...stamp(this._ctx),
-            req: {
-                elements: [
-                    this._regionSchema(rect),
-                    this._lineSchema(rect, rect.x),
-                ],
-            },
-        }));
-        this._previewId = previewId;
-        this._rect = rect;
-        this._lastX = rect.x;
-    }
-    move(x) {
-        if (!this._previewId || !this._rect)
+        }
+        const sent = JSON.stringify(elements);
+        if (sent === this._sent)
             return;
-        this._pendingX = x;
-        if (this._inFlight)
-            return;
-        void this._flush();
-    }
-    async _flush() {
-        const rect = this._rect;
-        if (!rect || this._pendingX === null)
-            return;
-        const x = this._pendingX;
-        this._pendingX = null;
-        this._lastX = x;
-        this._inFlight = true;
-        try {
+        const shape = elements.map((el) => el.drawdyElementId).join(",");
+        if (this._previewId && shape === this._shape) {
+            this._sent = sent;
             await this._ctx.issueCommand({
                 type: "command:scene:update-drawdy-preview-elements",
                 ...stamp(this._ctx),
-                req: { elements: [this._lineSchema(rect, x)] },
+                req: { elements },
             });
+            return;
         }
-        finally {
-            this._inFlight = false;
-        }
-        if (this._pendingX !== null)
-            await this._flush();
+        await this.clear();
+        const { previewId } = unwrap(await this._ctx.issueCommand({
+            type: "command:scene:create-drawdy-preview-elements",
+            ...stamp(this._ctx),
+            req: { elements, hitTestable: this._hitTestable },
+        }));
+        this._previewId = previewId;
+        this._shape = shape;
+        this._sent = sent;
     }
-    async hide() {
-        this._pendingX = null;
-        this._lastX = null;
-        this._rect = null;
+    async clear() {
         const previewId = this._previewId;
         this._previewId = null;
+        this._shape = "";
+        this._sent = "";
         if (!previewId)
             return;
         await this._ctx.issueCommand({
@@ -2696,195 +3057,679 @@ class Playhead {
         });
     }
 }
-
-function rotatePoint(p, cx, cy, angle) {
-    if (angle === 0)
-        return [p[0], p[1]];
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    const dx = p[0] - cx;
-    const dy = p[1] - cy;
-    return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
-}
-function rotatePolyline(points, cx, cy, angle) {
-    if (angle === 0)
-        return points;
-    return points.map((p) => rotatePoint(p, cx, cy, angle));
-}
-function combineRects(rects) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const r of rects) {
-        if (r.width < 0 || r.height < 0)
-            continue;
-        minX = Math.min(minX, r.x);
-        minY = Math.min(minY, r.y);
-        maxX = Math.max(maxX, r.x + r.width);
-        maxY = Math.max(maxY, r.y + r.height);
+/**
+ * Everything Serene draws on the board around its frames: the frame bar, the
+ * time ruler, note labels, the playhead and the empty state. Lines are canvas
+ * previews and text is component previews (DOM on the canvas's widget layer),
+ * so all of it pans and zooms with the board and stays under Drawdy's panels.
+ * Both scale with zoom, so sizes are screen pixels divided by zoom.
+ */
+class FrameOverlay {
+    _ctx;
+    _styling;
+    _onClickTarget;
+    _frames = [];
+    _zoom = 1;
+    _settings = {
+        pxPerSecond: 200,
+        lowOctave: 3,
+        highOctave: 6,
+        stepsPerOctave: 5,
+    };
+    _selection = new Set();
+    _hovered = null;
+    _active = null;
+    _rangePreview = null;
+    _rangeTimer = null;
+    _dragging = false;
+    _guides;
+    _labels;
+    _playheads;
+    _dirty = false;
+    _syncing = false;
+    _clickIds = new Set();
+    constructor(_ctx, _styling, 
+    /** Asks for click events on a DOM id the overlay draws. */
+    _onClickTarget) {
+        this._ctx = _ctx;
+        this._styling = _styling;
+        this._onClickTarget = _onClickTarget;
+        this._guides = new PreviewBatch(_ctx);
+        this._labels = new PreviewBatch(_ctx);
+        this._playheads = new PreviewBatch(_ctx);
     }
-    if (!isFinite(minX))
-        return null;
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
-function monotonicRuns(line) {
-    if (line.length < 2)
-        return [];
-    const runs = [];
-    let current = [line[0]];
-    let direction = 0;
-    for (let i = 1; i < line.length; i++) {
-        const dx = line[i][0] - line[i - 1][0];
-        const sign = dx > 0 ? 1 : dx < 0 ? -1 : 0;
-        if (sign !== 0 && direction !== 0 && sign !== direction) {
-            runs.push(current);
-            current = [line[i - 1]];
-            direction = sign;
+    _id(part, frameId) {
+        return `${this._ctx.driverId}:${part}:${frameId}`;
+    }
+    frameForSample(domId) {
+        const prefix = "serene-sample-";
+        return domId.startsWith(prefix) ? domId.slice(prefix.length) : null;
+    }
+    frameForBar(domId) {
+        const prefix = "serene-bar-";
+        return domId.startsWith(prefix) ? domId.slice(prefix.length) : null;
+    }
+    _clickable(domId) {
+        if (!this._clickIds.has(domId)) {
+            this._clickIds.add(domId);
+            this._onClickTarget(domId);
         }
-        else if (direction === 0) {
-            direction = sign;
+        return domId;
+    }
+    // ---- Inputs
+    setZoom(zoom) {
+        if (zoom === this._zoom)
+            return;
+        this._zoom = zoom;
+        this._request();
+    }
+    setStyling(styling) {
+        this._styling = styling;
+        this._request();
+    }
+    setFrames(frames) {
+        this._frames = frames;
+        this._request();
+    }
+    /** Frame moves and resizes arrive before the debounced frame list. */
+    onSceneChanged(changed) {
+        let touched = false;
+        for (const el of changed) {
+            const frame = this._frames.find((f) => f.id === el.id);
+            const rect = frame ? elementBounds(el) : null;
+            if (!frame || !rect)
+                continue;
+            frame.rect = rect;
+            touched = true;
         }
-        current.push(line[i]);
+        if (touched)
+            this._request();
     }
-    runs.push(current);
-    return runs
-        .filter((run) => run.length >= 2)
-        .map((run) => run[run.length - 1][0] < run[0][0] ? [...run].reverse() : run);
-}
-function evenPick(items, keep) {
-    if (items.length <= keep)
-        return items;
-    if (keep <= 1)
-        return [items[0]];
-    const out = [];
-    for (let i = 0; i < keep; i++) {
-        out.push(items[Math.round((i * (items.length - 1)) / (keep - 1))]);
+    setSettings(settings) {
+        this._settings = settings;
+        this._request();
     }
-    return out;
-}
-function rectsOverlap(a, b) {
-    return (a.x < b.x + b.width &&
-        a.x + a.width > b.x &&
-        a.y < b.y + b.height &&
-        a.y + a.height > b.y);
-}
-
-const ELLIPSE_SEGMENTS = 48;
-const STROKE_COMPONENT_TYPES = new Set(["line", "arrow"]);
-function elementGlides(el) {
-    return (el.type === "freedraw" ||
-        STROKE_COMPONENT_TYPES.has(el.componentType ?? ""));
-}
-const OPACITY_CURVE = 2;
-function elementGain(el) {
-    const opacity = el.opacity;
-    if (typeof opacity !== "number" || !Number.isFinite(opacity))
-        return 1;
-    return Math.pow(Math.min(1, Math.max(0, opacity)), OPACITY_CURVE);
-}
-function elementBounds(el) {
-    const { x, y, width, height } = el;
-    if (x == null || y == null || width == null || height == null)
-        return null;
-    return { x, y, width, height };
-}
-function closed(points) {
-    if (points.length < 2)
-        return points;
-    const first = points[0];
-    const last = points[points.length - 1];
-    if (first[0] === last[0] && first[1] === last[1])
-        return points;
-    return [...points, [first[0], first[1]]];
-}
-function rectOutline(r) {
-    return closed([
-        [r.x, r.y],
-        [r.x + r.width, r.y],
-        [r.x + r.width, r.y + r.height],
-        [r.x, r.y + r.height],
-    ]);
-}
-function diamondOutline(r) {
-    return closed([
-        [r.x + r.width / 2, r.y],
-        [r.x + r.width, r.y + r.height / 2],
-        [r.x + r.width / 2, r.y + r.height],
-        [r.x, r.y + r.height / 2],
-    ]);
-}
-function ellipseOutline(r) {
-    const cx = r.x + r.width / 2;
-    const cy = r.y + r.height / 2;
-    const out = [];
-    for (let i = 0; i <= ELLIPSE_SEGMENTS; i++) {
-        const t = (i / ELLIPSE_SEGMENTS) * Math.PI * 2;
-        out.push([
-            cx + (r.width / 2) * Math.cos(t),
-            cy + (r.height / 2) * Math.sin(t),
+    setSelection(ids) {
+        this._selection = new Set(ids);
+        this._request();
+    }
+    setPointer(x, y) {
+        let hovered = null;
+        // Later frames draw on top, so the last hit wins.
+        for (const frame of this._frames) {
+            const r = frame.rect;
+            if (x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height) {
+                hovered = frame.id;
+            }
+        }
+        if (hovered === this._hovered)
+            return;
+        this._hovered = hovered;
+        this._request();
+    }
+    setDragging(dragging) {
+        this._dragging = dragging;
+        this._request();
+    }
+    setActive(id, playing) {
+        if (!id) {
+            this._active = null;
+        }
+        else if (this._active?.id === id) {
+            this._active.playing = playing;
+        }
+        else {
+            this._active = { id, progress: 0, playing };
+        }
+        this._request();
+    }
+    setProgress(progress) {
+        if (!this._active)
+            return;
+        this._active.progress = Math.min(1, Math.max(0, progress));
+        this._request();
+    }
+    /** Show the guides on one frame while Range is adjusted in the panel. */
+    previewRange() {
+        const target = this._frames.find((f) => this._selection.has(f.id)) ?? this._frames[0];
+        if (!target)
+            return;
+        this._rangePreview = target.id;
+        if (this._rangeTimer)
+            clearTimeout(this._rangeTimer);
+        this._rangeTimer = setTimeout(() => {
+            this._rangeTimer = null;
+            this._rangePreview = null;
+            this._request();
+        }, RANGE_PREVIEW_HOLD_MS);
+        this._request();
+    }
+    // ---- Sync
+    _request() {
+        this._dirty = true;
+        if (this._syncing)
+            return;
+        void this._drain();
+    }
+    async _drain() {
+        this._syncing = true;
+        try {
+            while (this._dirty) {
+                this._dirty = false;
+                try {
+                    await this._sync();
+                }
+                catch {
+                    // A failed command leaves stale previews; the next change redraws.
+                }
+            }
+        }
+        finally {
+            this._syncing = false;
+        }
+    }
+    _guidesOn(frame) {
+        return (this._hovered === frame.id ||
+            this._selection.has(frame.id) ||
+            (this._active?.id === frame.id && this._active.playing) ||
+            this._rangePreview === frame.id);
+    }
+    _playheadOn(frame) {
+        return (this._hovered === frame.id ||
+            this._selection.has(frame.id) ||
+            this._active?.id === frame.id);
+    }
+    async _sync() {
+        const frames = this._dragging ? [] : this._frames;
+        const guides = [];
+        const labels = [];
+        const playheads = [];
+        for (const frame of frames) {
+            labels.push(...this._bar(frame));
+            if (this._guidesOn(frame)) {
+                guides.push(...this._ticks(frame));
+                labels.push(...this._rulerLabels(frame), ...this._noteLabels(frame));
+            }
+            if (this._playheadOn(frame))
+                playheads.push(...this._playhead(frame));
+            if (frame.empty)
+                labels.push(...this._emptyState(frame));
+        }
+        await Promise.all([
+            this._guides.sync(guides),
+            this._labels.sync(labels),
+            this._playheads.sync(playheads),
         ]);
     }
-    return out;
-}
-function shapeOutline(componentType, r) {
-    switch (componentType) {
-        case "rect":
-            return rectOutline(r);
-        case "diamond":
-            return diamondOutline(r);
-        case "circle":
-            return ellipseOutline(r);
-        default:
-            return null;
+    // ---- Builders
+    /**
+     * Text is DOM on the canvas's widget layer, which scales it by zoom. Each
+     * piece is laid out at its screen size inside a fixed box, then scaled by
+     * `scale / zoom` about its top-left, so it lands at `scale` of its design
+     * size, so text is never laid out at a tiny pre-zoom size.
+     */
+    _component(id, at, size, scale, schema) {
+        const s = scale / this._zoom;
+        const round = (v) => Math.round(v * 1000) / 1000;
+        const dx = round((-size.width * (1 - s)) / 2);
+        const dy = round((-size.height * (1 - s)) / 2);
+        return {
+            type: "component",
+            drawdyElementId: id,
+            x: at.x,
+            y: at.y,
+            width: size.width * s,
+            height: size.height * s,
+            schema: {
+                type: "row",
+                styles: {
+                    width: [round(size.width), "px"],
+                    height: [round(size.height), "px"],
+                    overflow: "hidden",
+                    // Transforms scale about the center; the translate keeps the top-left put.
+                    transform: `translate(${dx}px, ${dy}px) scale(${round(s * 1e6) / 1e6})`,
+                },
+                children: [
+                    // The host lines widgets up on their first baseline; a full-height
+                    // box with no text puts it at the bottom, so nothing is pushed down.
+                    { type: "box", styles: { width: [0, "px"], height: [round(size.height), "px"] } },
+                    {
+                        ...schema,
+                        styles: {
+                            ...schema.styles,
+                            width: [round(size.width), "px"],
+                            height: [round(size.height), "px"],
+                        },
+                    },
+                ],
+            },
+        };
     }
-}
-function elementLines(el) {
-    if (el.type === "frame")
-        return [];
-    const bounds = elementBounds(el);
-    const rotation = el.rotation ?? 0;
-    const center = bounds
-        ? [bounds.x + bounds.width / 2, bounds.y + bounds.height / 2]
-        : null;
-    const spin = (points) => center ? rotatePolyline(points, center[0], center[1], rotation) : points;
-    if (el.type === "freedraw") {
-        const points = el.points;
-        if (!points || points.length < 2)
+    get _tertiary() {
+        return `color-mix(in srgb, ${this._styling.foreground} ${TERTIARY_OPACITY * 100}%, transparent)`;
+    }
+    _rect(id, rect, fill, stroke, radius, seed) {
+        return {
+            type: "shape",
+            drawdyElementId: id,
+            componentType: "rect",
+            ...rect,
+            fillColor: fill,
+            strokeColor: stroke,
+            strokeWidth: 1 / this._zoom,
+            cornerRadius: radius,
+            roughness: 0,
+            seed,
+        };
+    }
+    _ticks(frame) {
+        const zoom = this._zoom;
+        const { x, y, width } = frame.rect;
+        return rulerTicks(width, this._settings.pxPerSecond, zoom).map((tick, index) => ({
+            type: "line",
+            drawdyElementId: `${this._id("tick", frame.id)}:${index}`,
+            color: this._styling.mutedForeground,
+            strokeWidth: 1 / zoom,
+            roughness: 0,
+            seed: 41 + index,
+            opacity: tick.major ? 0.6 : 0.35,
+            from: [x + tick.x, y],
+            to: [x + tick.x, y + (tick.major ? BOARD.majorTick : BOARD.minorTick) / zoom],
+        }));
+    }
+    _rulerLabels(frame) {
+        const zoom = this._zoom;
+        const { x, y, width } = frame.rect;
+        const labeled = rulerTicks(width, this._settings.pxPerSecond, zoom).filter((tick) => tick.label !== null);
+        if (labeled.length === 0)
             return [];
-        return [points.map(([x, y]) => [x, y])];
+        const screenWidth = width * zoom;
+        const children = [];
+        let cursor = 0;
+        labeled.forEach((tick, index) => {
+            const start = Math.round(tick.x * zoom + BOARD.tickLabelInset);
+            const next = labeled[index + 1];
+            const end = next ? Math.round(next.x * zoom + BOARD.tickLabelInset) : screenWidth;
+            children.push({ type: "box", styles: { width: [start - cursor, "px"], height: [1, "px"] } });
+            children.push({
+                type: "text",
+                child: tick.label ?? "",
+                styles: { width: [end - start, "px"], fontSize: [11, "px"], color: this._tertiary },
+            });
+            cursor = end;
+        });
+        return [
+            this._component(this._id("ruler-labels", frame.id), { x, y: y + BOARD.tickLabelTop / zoom }, { width: screenWidth, height: LABEL_BOX }, 1, { type: "row", children }),
+        ];
     }
-    if (STROKE_COMPONENT_TYPES.has(el.componentType ?? "")) {
-        const points = el.points;
-        if (!points || points.length < 2)
+    _noteLabels(frame) {
+        const zoom = this._zoom;
+        const { lowOctave, highOctave, stepsPerOctave } = this._settings;
+        const labels = noteLabels(frame.rect, lowOctave, highOctave, stepsPerOctave, zoom);
+        if (labels.length === 0)
             return [];
-        return [spin(points.map(([x, y]) => [x, y]))];
+        const children = [];
+        let cursor = 0;
+        for (const label of labels) {
+            const top = Math.round((label.top - frame.rect.y) * zoom);
+            if (top > cursor)
+                children.push({ type: "box", styles: { width: [1, "px"], height: [top - cursor, "px"] } });
+            children.push({
+                type: "text",
+                child: label.label,
+                styles: { height: [BOARD.noteLineHeight, "px"], fontSize: [11, "px"], color: this._tertiary },
+            });
+            cursor = top + BOARD.noteLineHeight;
+        }
+        return [
+            this._component(this._id("note-labels", frame.id), { x: frame.rect.x + BOARD.noteInset / zoom, y: frame.rect.y }, { width: 40, height: Math.max(LABEL_BOX, cursor) }, 1, { type: "column", children }),
+        ];
     }
-    if (!bounds || bounds.width < 0 || bounds.height < 0)
-        return [];
-    const outline = shapeOutline(el.componentType, bounds);
-    if (outline)
-        return [spin(outline)];
-    return [spin(rectOutline(bounds))];
+    _playhead(frame) {
+        const zoom = this._zoom;
+        const { x, y, width, height } = frame.rect;
+        const active = this._active?.id === frame.id ? this._active : null;
+        const px = x + (active?.progress ?? 0) * width;
+        const w = BOARD.handleWidth / zoom;
+        const h = BOARD.handleHeight / zoom;
+        const top = y - BOARD.handleAbove / zoom;
+        const mid = top + h / 2;
+        const grip = 3 / zoom;
+        const idle = !active || (!active.playing && active.progress === 0);
+        const gripLine = (part, dx, seed) => ({
+            type: "line",
+            drawdyElementId: this._id(part, frame.id),
+            color: this._styling.primary,
+            strokeWidth: 1.5 / zoom,
+            roughness: 0,
+            seed,
+            from: [px + dx, mid - grip],
+            to: [px + dx, mid + grip],
+        });
+        return [
+            this._rect(this._id("playhead-handle", frame.id), { x: px - w / 2, y: top, width: w, height: h }, this._styling.background, this._styling.border, w / 2, 61),
+            gripLine("playhead-grip-a", -1.5 / zoom, 62),
+            gripLine("playhead-grip-b", 1.5 / zoom, 63),
+            {
+                type: "line",
+                drawdyElementId: this._id("playhead-line", frame.id),
+                color: this._styling.primary,
+                strokeWidth: 2 / zoom,
+                roughness: 0,
+                seed: 64,
+                opacity: idle ? IDLE_PLAYHEAD_OPACITY : 1,
+                from: [px, top + h],
+                to: [px, y + height],
+            },
+        ];
+    }
+    _timeText(frame) {
+        const duration = frame.rect.width / this._settings.pxPerSecond;
+        const active = this._active?.id === frame.id ? this._active : null;
+        if (!active || (!active.playing && active.progress === 0)) {
+            return formatClock(duration);
+        }
+        return `${formatClock(active.progress * duration)} / ${formatClock(duration)}`;
+    }
+    _bar(frame) {
+        const zoom = this._zoom;
+        const fit = fitBar(truncate(frame.name), this._timeText(frame), frame.rect.width * zoom, zoom);
+        if (!fit)
+            return [];
+        const k = fit.scale;
+        const s = this._styling;
+        const children = [
+            {
+                type: "image",
+                child: ICON_DATA_URI,
+                styles: { width: [20, "px"], height: [20, "px"], borderRadius: [5, "px"] },
+            },
+        ];
+        if (fit.name !== null) {
+            children.push({
+                type: "text",
+                child: fit.name,
+                styles: { fontSize: [13, "px"], fontWeight: "medium", color: s.foreground },
+            });
+        }
+        if (fit.time !== null) {
+            children.push({
+                type: "text",
+                child: fit.time,
+                styles: { fontSize: [13, "px"], color: this._tertiary },
+            });
+        }
+        return [
+            this._component(this._id("bar", frame.id), {
+                x: frame.rect.x,
+                y: frame.rect.y - ((BOARD.barGap + BOARD.barHeight) * k) / zoom,
+            }, { width: Math.ceil(fit.width / k), height: BOARD.barHeight }, k, {
+                type: "row",
+                // Click selects the frame; double-click renames it in the panel.
+                domId: this._clickable(`serene-bar-${frame.id}`),
+                styles: {
+                    pointerEvents: "auto",
+                    cursor: "default",
+                    padding: [8, "px"],
+                    gap: 8,
+                    crossAxisAlignment: "center",
+                    backgroundColor: s.background,
+                    borderColor: s.border,
+                    borderWidth: [1, "px"],
+                    borderRadius: [10, "px"],
+                },
+                children,
+            }),
+        ];
+    }
+    _emptyState(frame) {
+        const zoom = this._zoom;
+        const k = barScale(zoom);
+        const { x, y, width, height } = frame.rect;
+        if (width * zoom < EMPTY_MIN_WIDTH * k || height * zoom < EMPTY_MIN_HEIGHT * k)
+            return [];
+        const sampleId = this._clickable(`serene-sample-${frame.id}`);
+        const s = this._styling;
+        return [
+            this._component(this._id("empty", frame.id), { x, y: y + height / 2 - (EMPTY_HALF_HEIGHT * k) / zoom }, { width: Math.round((width * zoom) / k), height: EMPTY_HALF_HEIGHT * 2 }, k, {
+                type: "column",
+                styles: { gap: 10, crossAxisAlignment: "center" },
+                children: [
+                    {
+                        type: "text",
+                        child: "Draw anywhere, then press play.",
+                        styles: { fontSize: [14, "px"], color: s.mutedForeground, textAlign: "center" },
+                    },
+                    {
+                        type: "button",
+                        domId: sampleId,
+                        styles: {
+                            padding: [6, "px"],
+                            borderRadius: [6, "px"],
+                            backgroundColor: "transparent",
+                            pointerEvents: "auto",
+                            cursor: "pointer",
+                            hover: {
+                                backgroundColor: `color-mix(in srgb, ${s.foreground} 6%, transparent)`,
+                            },
+                        },
+                        children: [
+                            {
+                                type: "text",
+                                child: "Try a sample",
+                                styles: { fontSize: [13, "px"], fontWeight: "medium", color: s.foreground },
+                            },
+                        ],
+                    },
+                ],
+            }),
+        ];
+    }
 }
-function elementInk(el) {
-    const gain = elementGain(el);
-    const glide = elementGlides(el);
-    return elementLines(el)
-        .filter((line) => line.length >= 2)
-        .map((points) => ({ points, gain, glide }));
+
+const SERENE_META_KEY = "serene";
+// Asks Drawdy to skip its own name chip; Serene draws the frame bar instead.
+const HIDE_LABEL_META_KEY = "hideFrameLabel";
+const FRAME_WIDTH = 960;
+const FRAME_HEIGHT = 600;
+const FRAME_GAP = 120;
+const FLY_MS = 380;
+const FLY_MAX_ZOOM = 0.8;
+// Room around the frame so the frame bar above it stays in view.
+const FLY_PADDING = 80;
+const FRAME_PROPERTIES = [
+    "type",
+    "meta",
+    "x",
+    "y",
+    "width",
+    "height",
+];
+function isSereneFrame(el) {
+    if (el.type !== "frame")
+        return false;
+    const marker = el.meta?.[SERENE_META_KEY];
+    return marker === true || (typeof marker === "object" && marker !== null);
 }
-function sceneInk(elements) {
-    return elements.flatMap(elementInk);
+/**
+ * Drivers cannot read or set a Drawdy frame's own name, so a Serene frame
+ * keeps its name in its meta. Frames made before names existed have none.
+ */
+function storedFrameName(el) {
+    const marker = el.meta?.[SERENE_META_KEY];
+    if (typeof marker !== "object" || marker === null)
+        return null;
+    const name = marker.name;
+    return typeof name === "string" && name.trim() !== "" ? name : null;
 }
-function laserInk(strokes) {
-    return strokes
-        .filter((stroke) => stroke.length >= 2)
-        .map((stroke) => ({
-        points: stroke.map(([x, y]) => [x, y]),
-        gain: 1,
-        glide: true,
+/** Unnamed frames take the first "Serene {n}" that no other frame uses. */
+function frameNames(frames) {
+    const stored = frames.map(storedFrameName);
+    const taken = new Set(stored.filter((name) => name !== null));
+    let n = 1;
+    return stored.map((name) => {
+        if (name !== null)
+            return name;
+        while (taken.has(`Serene ${n}`))
+            n++;
+        const picked = `Serene ${n}`;
+        taken.add(picked);
+        return picked;
+    });
+}
+/** "Serene {n}": the first unused number, starting at frame count + 1. */
+function nextFrameName(frames) {
+    const taken = new Set(frameNames(frames));
+    let n = frames.length + 1;
+    while (taken.has(`Serene ${n}`))
+        n++;
+    return `Serene ${n}`;
+}
+function sereneFrameSchema(id, origin, name) {
+    return {
+        type: "frame",
+        drawdyElementId: id,
+        position: [origin.x, origin.y],
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+        rotation: 0,
+        meta: { [SERENE_META_KEY]: { name }, [HIDE_LABEL_META_KEY]: true },
+    };
+}
+function pad(rect, amount) {
+    return {
+        x: rect.x - amount,
+        y: rect.y - amount,
+        width: rect.width + amount * 2,
+        height: rect.height + amount * 2,
+    };
+}
+async function framesWith(ctx, drawdyElementIds) {
+    const { drawdyElements } = unwrap(await ctx.issueCommand({
+        type: "command:scene:get-drawdy-elements",
+        ...stamp(ctx),
+        req: { properties: FRAME_PROPERTIES, drawdyElementIds },
     }));
+    return drawdyElements.filter(isSereneFrame);
+}
+async function listSereneFrames(ctx) {
+    return framesWith(ctx);
+}
+async function sereneFramesAmong(ctx, ids) {
+    if (ids.length === 0)
+        return [];
+    return framesWith(ctx, ids);
+}
+/**
+ * Frames made before names and the Serene bar existed: store the name they are
+ * listed under, so it cannot shift as frames come and go, and hide Drawdy's chip.
+ */
+async function migrateFrames(ctx, frames, names) {
+    const updates = frames
+        .map((frame, index) => ({ frame, name: names[index] }))
+        .filter(({ frame }) => frame.meta?.[HIDE_LABEL_META_KEY] !== true || storedFrameName(frame) === null)
+        .map(({ frame, name }) => ({
+        drawdyElementId: frame.id,
+        properties: {
+            meta: { [SERENE_META_KEY]: { name }, [HIDE_LABEL_META_KEY]: true },
+        },
+    }));
+    if (updates.length === 0)
+        return;
+    await ctx.issueCommand({
+        type: "command:scene:update-drawdy-elements",
+        ...stamp(ctx),
+        req: { updates },
+    });
+}
+async function viewportCenter(ctx) {
+    const { rect } = unwrap(await ctx.issueCommand({
+        type: "command:camera:get-viewport-rect",
+        ...stamp(ctx),
+    }));
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+/** Right of the rightmost Serene frame, level with it; centered in view when there is none. */
+async function nextFrameOrigin(ctx, frames) {
+    let rightmost = null;
+    for (const frame of frames) {
+        const bounds = elementBounds(frame);
+        if (!bounds)
+            continue;
+        if (!rightmost || bounds.x + bounds.width > rightmost.x + rightmost.width) {
+            rightmost = bounds;
+        }
+    }
+    if (rightmost) {
+        return { x: rightmost.x + rightmost.width + FRAME_GAP, y: rightmost.y };
+    }
+    const center = await viewportCenter(ctx);
+    return { x: center.x - FRAME_WIDTH / 2, y: center.y - FRAME_HEIGHT / 2 };
+}
+async function flyToFrame(ctx, rect) {
+    unwrap(await ctx.issueCommand({
+        type: "command:camera:fly-to-rect",
+        ...stamp(ctx),
+        req: {
+            rect: pad(rect, FLY_PADDING),
+            flyDurationMs: FLY_MS,
+            zoom: FLY_MAX_ZOOM,
+        },
+    }));
+}
+const MAX_FRAME_NAME = 60;
+async function renameFrame(ctx, id, name) {
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:update-drawdy-elements",
+        ...stamp(ctx),
+        req: {
+            updates: [
+                { drawdyElementId: id, properties: { meta: { [SERENE_META_KEY]: { name } } } },
+            ],
+        },
+    }));
+}
+async function selectFrame(ctx, id) {
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:set-selection",
+        ...stamp(ctx),
+        req: { drawdyElementIds: [id] },
+    }));
+}
+async function selectAndFlyTo(ctx, id) {
+    const [frame] = await sereneFramesAmong(ctx, [id]);
+    const bounds = frame ? elementBounds(frame) : null;
+    if (!bounds)
+        return;
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:set-selection",
+        ...stamp(ctx),
+        req: { drawdyElementIds: [id] },
+    }));
+    await flyToFrame(ctx, bounds);
+}
+async function addSereneFrame(ctx) {
+    const frames = await listSereneFrames(ctx);
+    const origin = await nextFrameOrigin(ctx, frames);
+    const id = ctx.generateId();
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:add-drawdy-elements",
+        ...stamp(ctx),
+        req: {
+            elements: [sereneFrameSchema(id, origin, nextFrameName(frames))],
+        },
+    }));
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:set-selection",
+        ...stamp(ctx),
+        req: { drawdyElementIds: [id] },
+    }));
+    await flyToFrame(ctx, {
+        ...origin,
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+    });
+    return id;
 }
 
 /** Sweep rate at Speed 1.0x: a 960 px frame lasts 4.8 s. */
@@ -3166,160 +4011,6 @@ function buildScore(rect, ink, options = {}) {
         voices,
     };
 }
-function playheadX(score, elapsedSec) {
-    const t = Math.max(0, Math.min(score.durationSec, elapsedSec));
-    return score.rect.x + (t / score.durationSec) * score.rect.width;
-}
-
-const SERENE_META_KEY = "serene";
-const FRAME_WIDTH = 960;
-const FRAME_HEIGHT = 600;
-const FRAME_GAP = 120;
-const FLY_MS = 380;
-const FLY_MAX_ZOOM = 0.8;
-// Room around the frame so the frame bar above it stays in view.
-const FLY_PADDING = 80;
-const FRAME_PROPERTIES = [
-    "type",
-    "meta",
-    "x",
-    "y",
-    "width",
-    "height",
-];
-function isSereneFrame(el) {
-    if (el.type !== "frame")
-        return false;
-    const marker = el.meta?.[SERENE_META_KEY];
-    return marker === true || (typeof marker === "object" && marker !== null);
-}
-/**
- * Drivers cannot read or set a Drawdy frame's own name, so a Serene frame
- * keeps its name in its meta. Frames made before names existed have none.
- */
-function storedFrameName(el) {
-    const marker = el.meta?.[SERENE_META_KEY];
-    if (typeof marker !== "object" || marker === null)
-        return null;
-    const name = marker.name;
-    return typeof name === "string" && name.trim() !== "" ? name : null;
-}
-function frameNames(frames) {
-    return frames.map((frame, index) => storedFrameName(frame) ?? `Serene ${index + 1}`);
-}
-/** "Serene {n}": the first unused number, starting at frame count + 1. */
-function nextFrameName(frames) {
-    const taken = new Set(frameNames(frames));
-    let n = frames.length + 1;
-    while (taken.has(`Serene ${n}`))
-        n++;
-    return `Serene ${n}`;
-}
-function sereneFrameSchema(id, origin, name) {
-    return {
-        type: "frame",
-        drawdyElementId: id,
-        position: [origin.x, origin.y],
-        width: FRAME_WIDTH,
-        height: FRAME_HEIGHT,
-        rotation: 0,
-        meta: { [SERENE_META_KEY]: { name } },
-    };
-}
-function pad(rect, amount) {
-    return {
-        x: rect.x - amount,
-        y: rect.y - amount,
-        width: rect.width + amount * 2,
-        height: rect.height + amount * 2,
-    };
-}
-async function framesWith(ctx, drawdyElementIds) {
-    const { drawdyElements } = unwrap(await ctx.issueCommand({
-        type: "command:scene:get-drawdy-elements",
-        ...stamp(ctx),
-        req: { properties: FRAME_PROPERTIES, drawdyElementIds },
-    }));
-    return drawdyElements.filter(isSereneFrame);
-}
-async function listSereneFrames(ctx) {
-    return framesWith(ctx);
-}
-async function sereneFramesAmong(ctx, ids) {
-    if (ids.length === 0)
-        return [];
-    return framesWith(ctx, ids);
-}
-async function viewportCenter(ctx) {
-    const { rect } = unwrap(await ctx.issueCommand({
-        type: "command:camera:get-viewport-rect",
-        ...stamp(ctx),
-    }));
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-}
-/** Right of the rightmost Serene frame, level with it; centered in view when there is none. */
-async function nextFrameOrigin(ctx, frames) {
-    let rightmost = null;
-    for (const frame of frames) {
-        const bounds = elementBounds(frame);
-        if (!bounds)
-            continue;
-        if (!rightmost || bounds.x + bounds.width > rightmost.x + rightmost.width) {
-            rightmost = bounds;
-        }
-    }
-    if (rightmost) {
-        return { x: rightmost.x + rightmost.width + FRAME_GAP, y: rightmost.y };
-    }
-    const center = await viewportCenter(ctx);
-    return { x: center.x - FRAME_WIDTH / 2, y: center.y - FRAME_HEIGHT / 2 };
-}
-async function flyToFrame(ctx, rect) {
-    unwrap(await ctx.issueCommand({
-        type: "command:camera:fly-to-rect",
-        ...stamp(ctx),
-        req: {
-            rect: pad(rect, FLY_PADDING),
-            flyDurationMs: FLY_MS,
-            zoom: FLY_MAX_ZOOM,
-        },
-    }));
-}
-async function selectAndFlyTo(ctx, id) {
-    const [frame] = await sereneFramesAmong(ctx, [id]);
-    const bounds = frame ? elementBounds(frame) : null;
-    if (!bounds)
-        return;
-    unwrap(await ctx.issueCommand({
-        type: "command:scene:set-selection",
-        ...stamp(ctx),
-        req: { drawdyElementIds: [id] },
-    }));
-    await flyToFrame(ctx, bounds);
-}
-async function addSereneFrame(ctx) {
-    const frames = await listSereneFrames(ctx);
-    const origin = await nextFrameOrigin(ctx, frames);
-    const id = ctx.generateId();
-    unwrap(await ctx.issueCommand({
-        type: "command:scene:add-drawdy-elements",
-        ...stamp(ctx),
-        req: {
-            elements: [sereneFrameSchema(id, origin, nextFrameName(frames))],
-        },
-    }));
-    unwrap(await ctx.issueCommand({
-        type: "command:scene:set-selection",
-        ...stamp(ctx),
-        req: { drawdyElementIds: [id] },
-    }));
-    await flyToFrame(ctx, {
-        ...origin,
-        width: FRAME_WIDTH,
-        height: FRAME_HEIGHT,
-    });
-    return id;
-}
 
 const INK_PROPERTIES = [
     "type",
@@ -3450,6 +4141,7 @@ async function thumbStrokes(ctx, frameId, rect) {
 async function frameSummaries(ctx) {
     const frames = await listSereneFrames(ctx);
     const names = frameNames(frames);
+    void migrateFrames(ctx, frames, names).catch(() => undefined);
     const summaries = await Promise.all(frames.map(async (frame, index) => {
         const rect = elementBounds(frame);
         if (!rect || rect.width <= 0 || rect.height <= 0)
@@ -3457,12 +4149,60 @@ async function frameSummaries(ctx) {
         return {
             id: frame.id,
             name: names[index],
+            x: rect.x,
+            y: rect.y,
             width: rect.width,
             height: rect.height,
             strokes: await thumbStrokes(ctx, frame.id, rect),
         };
     }));
     return summaries.filter((s) => s !== null);
+}
+
+// A palette blue that reads the same in light and dark themes.
+const SAMPLE_COLOR = "#698CF9";
+const SAMPLE_STROKE_WIDTH = 4;
+const CURVE_POINTS = 48;
+function curve(from, to, y) {
+    const points = [];
+    for (let i = 0; i <= CURVE_POINTS; i++) {
+        const u = i / CURVE_POINTS;
+        points.push([from + (to - from) * u, y(u)]);
+    }
+    return points;
+}
+/** Frame-relative strokes (0..1): a rising phrase, its falling answer and low plucks. */
+function sampleShapes() {
+    const phrase = curve(0.06, 0.46, (u) => 0.6 - 0.16 * Math.sin(u * Math.PI * 3) - 0.22 * u);
+    const answer = curve(0.52, 0.94, (u) => 0.32 + 0.1 * Math.sin(u * Math.PI * 2) + 0.3 * u);
+    const plucks = [0.1, 0.3, 0.5, 0.7, 0.9].map((x) => [
+        [x, 0.86],
+        [x + 0.004, 0.862],
+    ]);
+    return [phrase, answer, ...plucks];
+}
+function freedraw(ctx, points) {
+    const xs = points.map((p) => p[0]);
+    const ys = points.map((p) => p[1]);
+    return {
+        type: "freedraw",
+        drawdyElementId: ctx.generateId(),
+        points: points.flat(),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
+        spline: true,
+        strokeColor: SAMPLE_COLOR,
+        strokeWidth: SAMPLE_STROKE_WIDTH,
+        meta: {},
+    };
+}
+async function addSample(ctx, frame) {
+    const elements = sampleShapes().map((shape) => freedraw(ctx, shape.map(([u, v]) => [frame.x + u * frame.width, frame.y + v * frame.height])));
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:add-drawdy-elements",
+        ...stamp(ctx),
+        req: { elements },
+    }));
 }
 
 const SETTINGS_KEY = "settings";
@@ -3567,13 +4307,9 @@ function saveSettings(ctx, settings) {
 const EMPTY_REGION = { x: 0, y: 0, width: 1, height: 1 };
 const REFRESH_DEBOUNCE_MS = 120;
 const FRAME_LIST_DEBOUNCE_MS = 250;
-function sameRect(a, b) {
-    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
 class SereneSession {
     _ctx;
-    _playhead;
-    _transport;
+    _overlay;
     _styling;
     _score = null;
     _rect = null;
@@ -3588,26 +4324,35 @@ class SereneSession {
     _frameListTimer = null;
     _panelOpened = false;
     _selection = [];
-    constructor(_ctx, _playhead, _transport, _styling) {
+    _pendingRename = null;
+    constructor(_ctx, _overlay, _styling) {
         this._ctx = _ctx;
-        this._playhead = _playhead;
-        this._transport = _transport;
+        this._overlay = _overlay;
         this._styling = _styling;
     }
     async restoreSettings() {
         this._settings = await loadSettings(this._ctx);
+        this._syncOverlaySettings();
     }
     _updateSettings(patch) {
         this._settings = { ...this._settings, ...patch };
         saveSettings(this._ctx, this._settings);
+        this._syncOverlaySettings();
+    }
+    _syncOverlaySettings() {
+        this._overlay.setSettings({
+            pxPerSecond: speedToPxPerSecond(this._settings.speed),
+            lowOctave: this._settings.lowOctave,
+            highOctave: this._settings.highOctave,
+            stepsPerOctave: getScale(this._settings.scale).steps.length,
+        });
     }
     postSettings() {
         postToPanel(this._ctx, { type: "settings", values: this._settings });
     }
     setStyling(styling) {
         this._styling = styling;
-        this._playhead.setStyling(styling);
-        this._transport.setStyling(styling);
+        this._overlay.setStyling(styling);
     }
     async openPanel() {
         this._panelOpened = true;
@@ -3627,15 +4372,19 @@ class SereneSession {
         }
     }
     async postFrames() {
+        const frames = await frameSummaries(this._ctx);
+        this._overlay.setFrames(frames.map((frame) => ({
+            id: frame.id,
+            name: frame.name,
+            rect: { x: frame.x, y: frame.y, width: frame.width, height: frame.height },
+            empty: frame.strokes.length === 0,
+        })));
         if (!this._panelOpened)
             return;
-        const frames = await frameSummaries(this._ctx);
         postToPanel(this._ctx, { type: "frames", frames });
     }
-    /** Thumbnails follow the board; coalesce bursts of scene changes. */
+    /** Names, thumbnails and empty states follow the board; coalesce bursts of changes. */
     scheduleFrames() {
-        if (!this._panelOpened)
-            return;
         if (this._frameListTimer)
             clearTimeout(this._frameListTimer);
         this._frameListTimer = setTimeout(() => {
@@ -3645,6 +4394,7 @@ class SereneSession {
     }
     setSelection(ids) {
         this._selection = ids;
+        this._overlay.setSelection(ids);
         if (!this._panelOpened)
             return;
         postToPanel(this._ctx, { type: "selection", ids });
@@ -3724,32 +4474,38 @@ class SereneSession {
         }, REFRESH_DEBOUNCE_MS);
     }
     async _refresh() {
-        const previous = this._rect;
         const resolved = await this._resolve(this._frameIds);
         if (!resolved) {
             if (this._playing)
-                await this.stop();
+                this.stop();
             this._postScore(false);
             return;
         }
-        const rect = this._rect;
-        if (this._playing && rect && previous && !sameRect(rect, previous)) {
-            await this._playhead.show(rect);
-            this._transport.setPlaying(rect);
-        }
         this._postScore(false, true);
     }
-    seek(progress) {
-        if (!this._score)
-            return;
-        postToPanel(this._ctx, {
-            type: "seek",
-            t: progress * this._score.durationSec,
-        });
-    }
-    async stop() {
+    stop() {
         postToPanel(this._ctx, { type: "stop" });
-        await this._playhead.hide();
+        this._overlay.setActive(null, false);
+    }
+    async selectFrame(frameId) {
+        await selectFrame(this._ctx, frameId);
+    }
+    /** Double-click on a frame bar: rename it in the panel's Frames list. */
+    async editFrameName(frameId) {
+        await selectFrame(this._ctx, frameId);
+        // A panel opened just now has not loaded yet; "ready" sends this again.
+        this._pendingRename = frameId;
+        await this.openPanel();
+        this.postTheme();
+        await this.postFrames();
+        postToPanel(this._ctx, { type: "edit-frame-name", id: frameId });
+    }
+    async addSample(frameId) {
+        const [frame] = await sereneFramesAmong(this._ctx, [frameId]);
+        const rect = frame ? elementBounds(frame) : null;
+        if (!rect)
+            return;
+        await addSample(this._ctx, rect);
     }
     async onPanelMessage(message) {
         switch (message.type) {
@@ -3760,6 +4516,10 @@ class SereneSession {
                 this.postBacking();
                 void this.postFrames();
                 postToPanel(this._ctx, { type: "selection", ids: this._selection });
+                if (this._pendingRename) {
+                    postToPanel(this._ctx, { type: "edit-frame-name", id: this._pendingRename });
+                    this._pendingRename = null;
+                }
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
@@ -3769,33 +4529,34 @@ class SereneSession {
             case "started":
                 this._pendingAutoplay = false;
                 this._playing = true;
-                if (this._rect)
-                    await this._playhead.show(this._rect);
-                this._transport.setPlaying(this._rect);
+                this._overlay.setActive(this._frameIds[0] ?? null, true);
                 return;
             case "progress":
-                if (this._score) {
-                    this._playhead.move(playheadX(this._score, message.t));
-                    this._transport.setProgress(this._score.durationSec > 0
-                        ? message.t / this._score.durationSec
-                        : 0);
+                if (this._score && this._score.durationSec > 0) {
+                    this._overlay.setProgress(message.t / this._score.durationSec);
                 }
                 return;
             case "paused":
-                // The playhead holds where it stopped; the bar offers Play again.
+                // The playhead holds where it stopped.
                 this._playing = false;
-                this._transport.setPlaying(null);
+                this._overlay.setActive(this._frameIds[0] ?? null, false);
                 return;
             case "ended":
             case "stopped":
                 this._playing = false;
-                this._transport.setPlaying(null);
-                this._transport.setProgress(0);
-                await this._playhead.hide();
+                this._overlay.setActive(null, false);
                 return;
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "rename-frame": {
+                const name = typeof message.name === "string" ? message.name.trim().slice(0, MAX_FRAME_NAME) : "";
+                if (!name)
+                    return;
+                await renameFrame(this._ctx, message.id, name);
+                await this.postFrames();
+                return;
+            }
             case "focus-frame":
                 await selectAndFlyTo(this._ctx, message.id);
                 return;
@@ -3804,6 +4565,7 @@ class SereneSession {
                 return;
             case "range":
                 this._updateSettings(normalizeRange(message.low, message.high, this._settings));
+                this._overlay.previewRange();
                 if (!this._rect)
                     return;
                 this._rebuild();
@@ -3869,373 +4631,6 @@ class SereneSession {
     }
 }
 
-const BUTTON_SIZE = 28;
-const BAR_GAP = 12;
-const TRACK_GAP = 10;
-const TRACK_WIDTH = 3;
-const KNOB_SIZE = 14;
-const KNOB_ACTIVE_SIZE = 20;
-const TRACK_HIT_HEIGHT = 24;
-const HOVER_SCALE = 1.15;
-const MIN_TRACK = 40;
-const FRAME_LABEL_REACH = 12 * (1.75 + 0.35);
-const GLYPH_RATIO = 0.5;
-const SHIELD_REACH = 1;
-const BUTTON_SEED = 13;
-const TRACK_SEED = 17;
-const PLAYED_SEED = 19;
-const KNOB_SEED = 23;
-const SHIELD_SEED = 29;
-const HIT_SEED = 31;
-function frameLabelReach(zoom) {
-    return FRAME_LABEL_REACH / Math.min(zoom || 1, 1);
-}
-function barLayout(anchor, zoom) {
-    const y = anchor.y - frameLabelReach(zoom) - (BAR_GAP + BUTTON_SIZE / 2) / zoom;
-    const buttonCenterX = anchor.x + BUTTON_SIZE / 2 / zoom;
-    const trackStart = anchor.x + (BUTTON_SIZE + TRACK_GAP) / zoom;
-    const trackEnd = Math.max(anchor.x + anchor.width, trackStart + MIN_TRACK / zoom);
-    return { y, buttonCenterX, trackStart, trackEnd };
-}
-function progressAt(layout, x) {
-    const span = layout.trackEnd - layout.trackStart;
-    if (span <= 0)
-        return 0;
-    return Math.min(1, Math.max(0, (x - layout.trackStart) / span));
-}
-function knobX(layout, progress) {
-    return layout.trackStart + progress * (layout.trackEnd - layout.trackStart);
-}
-class TransportBar {
-    _ctx;
-    _styling;
-    _selection = null;
-    _playingRect = null;
-    _previewId = null;
-    _previewShape = "";
-    _zoom = 1;
-    _buttonHovered = false;
-    _knobHovered = false;
-    _hiddenForDrag = false;
-    _progress = 0;
-    _dragX = null;
-    _progressBeforeDrag = 0;
-    _shield = null;
-    _queue = Promise.resolve();
-    _dirty = false;
-    _syncing = false;
-    constructor(_ctx, _styling) {
-        this._ctx = _ctx;
-        this._styling = _styling;
-    }
-    get buttonId() {
-        return `${this._ctx.driverId}:transport-button`;
-    }
-    get knobId() {
-        return `${this._ctx.driverId}:transport-knob`;
-    }
-    get shieldId() {
-        return `${this._ctx.driverId}:transport-shield`;
-    }
-    get _trackId() {
-        return `${this._ctx.driverId}:transport-track`;
-    }
-    get _playedId() {
-        return `${this._ctx.driverId}:transport-played`;
-    }
-    get _hitId() {
-        return `${this._ctx.driverId}:transport-hit`;
-    }
-    get hitIds() {
-        return [this.buttonId, this.knobId, this.shieldId];
-    }
-    get trackIds() {
-        return [this._trackId, this._playedId, this._hitId];
-    }
-    get clickIds() {
-        return [this.buttonId, ...this.trackIds];
-    }
-    get ownIds() {
-        return [...this.hitIds, this._trackId, this._playedId];
-    }
-    get mode() {
-        return this._playingRect ? "stop" : "play";
-    }
-    get seedIds() {
-        return this._selection?.ids ?? [];
-    }
-    get isDragging() {
-        return this._dragX !== null;
-    }
-    setStyling(styling) {
-        this._styling = styling;
-        this._requestSync();
-    }
-    setZoom(zoom) {
-        if (zoom === this._zoom)
-            return;
-        this._zoom = zoom;
-        this._requestSync();
-    }
-    setButtonHovered(hovered) {
-        if (hovered === this._buttonHovered)
-            return;
-        this._buttonHovered = hovered;
-        this._requestSync();
-    }
-    setKnobHovered(hovered) {
-        if (hovered === this._knobHovered)
-            return;
-        this._knobHovered = hovered;
-        this._requestSync();
-    }
-    jumpTo(x) {
-        const anchor = this._anchor();
-        if (!anchor || this.isDragging)
-            return null;
-        this._progress = progressAt(barLayout(anchor, this._zoom), x);
-        this._requestSync();
-        return this._progress;
-    }
-    setProgress(progress) {
-        if (this.isDragging)
-            return;
-        const clamped = Math.min(1, Math.max(0, progress));
-        if (clamped === this._progress)
-            return;
-        this._progress = clamped;
-        this._requestSync();
-    }
-    async beginDrag(x) {
-        const anchor = this._anchor();
-        if (!anchor)
-            return;
-        const { rect: viewport } = unwrap(await this._ctx.issueCommand({
-            type: "command:camera:get-viewport-rect",
-            ...stamp(this._ctx),
-        }));
-        this._shield = {
-            x: viewport.x - viewport.width * SHIELD_REACH,
-            y: viewport.y - viewport.height * SHIELD_REACH,
-            width: viewport.width * (1 + SHIELD_REACH * 2),
-            height: viewport.height * (1 + SHIELD_REACH * 2),
-        };
-        this._progressBeforeDrag = this._progress;
-        this._dragX = x;
-        this._progress = progressAt(barLayout(anchor, this._zoom), x);
-        this._requestSync();
-    }
-    dragTo(x) {
-        const anchor = this._anchor();
-        if (!this.isDragging || !anchor)
-            return;
-        this._dragX = x;
-        this._progress = progressAt(barLayout(anchor, this._zoom), x);
-        this._requestSync();
-    }
-    endDrag() {
-        if (!this.isDragging)
-            return null;
-        this._dragX = null;
-        this._shield = null;
-        this._requestSync();
-        return this._progress;
-    }
-    cancelDrag() {
-        if (!this.isDragging)
-            return;
-        this._dragX = null;
-        this._shield = null;
-        this._progress = this._progressBeforeDrag;
-        this._requestSync();
-    }
-    setSelection(ids) {
-        this._enqueue(async () => {
-            this._hiddenForDrag = false;
-            this._selection = await this._selectionFor(ids);
-            this._requestSync();
-        });
-    }
-    refreshIfAffected(changedIds) {
-        const current = this._selection;
-        if (!current)
-            return;
-        const watched = new Set(current.ids);
-        if (!changedIds.some((id) => watched.has(id)))
-            return;
-        this.setSelection(current.ids);
-    }
-    hideWhileDragging() {
-        this._enqueue(async () => {
-            this._hiddenForDrag = true;
-            this._requestSync();
-        });
-    }
-    setPlaying(rect) {
-        this._enqueue(async () => {
-            this._playingRect = rect;
-            this._requestSync();
-        });
-    }
-    _enqueue(task) {
-        this._queue = this._queue.then(task).catch(() => undefined);
-    }
-    _requestSync() {
-        this._dirty = true;
-        if (this._syncing)
-            return;
-        void this._drain();
-    }
-    async _drain() {
-        this._syncing = true;
-        try {
-            while (this._dirty) {
-                this._dirty = false;
-                try {
-                    await this._sync();
-                }
-                catch {
-                    this._previewId = null;
-                    this._previewShape = "";
-                }
-            }
-        }
-        finally {
-            this._syncing = false;
-        }
-    }
-    async _selectionFor(ids) {
-        const frames = await sereneFramesAmong(this._ctx, ids);
-        if (frames.length !== 1)
-            return null;
-        const rect = elementBounds(frames[0]);
-        if (!rect || rect.width <= 0 || rect.height <= 0)
-            return null;
-        return { rect, ids: [frames[0].id] };
-    }
-    _anchor() {
-        if (this._playingRect)
-            return this._playingRect;
-        if (this._hiddenForDrag)
-            return null;
-        return this._selection?.rect ?? null;
-    }
-    _circle(id, centerX, centerY, size, seed) {
-        return {
-            type: "shape",
-            drawdyElementId: id,
-            componentType: "circle",
-            x: centerX - size / 2,
-            y: centerY - size / 2,
-            width: size,
-            height: size,
-            strokeColor: this._styling.background,
-            fillColor: this._styling.primary,
-            strokeWidth: 2 / this._zoom,
-            roughness: 0,
-            seed,
-        };
-    }
-    _line(id, fromX, toX, y, color, seed) {
-        return {
-            type: "line",
-            drawdyElementId: id,
-            color,
-            strokeWidth: TRACK_WIDTH / this._zoom,
-            roughness: 0,
-            seed,
-            from: [fromX, y],
-            to: [Math.max(toX, fromX + 0.5 / this._zoom), y],
-        };
-    }
-    _hitBox(id, rect, seed) {
-        return {
-            type: "shape",
-            drawdyElementId: id,
-            componentType: "rect",
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            strokeColor: "transparent",
-            fillColor: this._styling.primary,
-            strokeWidth: 0,
-            roughness: 0,
-            seed,
-            opacity: 0,
-        };
-    }
-    _elements(anchor) {
-        const layout = barLayout(anchor, this._zoom);
-        const buttonSize = (BUTTON_SIZE * (this._buttonHovered ? HOVER_SCALE : 1)) / this._zoom;
-        const knobSize = (this._knobHovered || this.isDragging ? KNOB_ACTIVE_SIZE : KNOB_SIZE) /
-            this._zoom;
-        const knobCenter = knobX(layout, this._progress);
-        const button = {
-            ...this._circle(this.buttonId, layout.buttonCenterX, layout.y, buttonSize, BUTTON_SEED),
-            text: this.mode === "play" ? "▶" : "■",
-            textColor: this._styling.primaryForeground,
-            fontSize: (BUTTON_SIZE * GLYPH_RATIO) / this._zoom,
-            textAlign: "center",
-            textVerticalAlign: "middle",
-        };
-        const hitHeight = TRACK_HIT_HEIGHT / this._zoom;
-        const elements = [
-            this._hitBox(this._hitId, {
-                x: layout.trackStart,
-                y: layout.y - hitHeight / 2,
-                width: layout.trackEnd - layout.trackStart,
-                height: hitHeight,
-            }, HIT_SEED),
-            button,
-            this._line(this._trackId, layout.trackStart, layout.trackEnd, layout.y, this._styling.border, TRACK_SEED),
-            this._line(this._playedId, layout.trackStart, knobCenter, layout.y, this._styling.primary, PLAYED_SEED),
-            this._circle(this.knobId, knobCenter, layout.y, knobSize, KNOB_SEED),
-        ];
-        if (this._shield) {
-            elements.push(this._hitBox(this.shieldId, this._shield, SHIELD_SEED));
-        }
-        return elements;
-    }
-    async _sync() {
-        const anchor = this._anchor();
-        if (!anchor) {
-            await this._remove();
-            return;
-        }
-        const elements = this._elements(anchor);
-        const shape = elements.map((el) => el.drawdyElementId).join(",");
-        if (this._previewId && shape === this._previewShape) {
-            await this._ctx.issueCommand({
-                type: "command:scene:update-drawdy-preview-elements",
-                ...stamp(this._ctx),
-                req: { elements },
-            });
-            return;
-        }
-        await this._remove();
-        const { previewId } = unwrap(await this._ctx.issueCommand({
-            type: "command:scene:create-drawdy-preview-elements",
-            ...stamp(this._ctx),
-            req: { elements, hitTestable: true },
-        }));
-        this._previewId = previewId;
-        this._previewShape = shape;
-    }
-    async _remove() {
-        const previewId = this._previewId;
-        this._previewId = null;
-        this._previewShape = "";
-        if (!previewId)
-            return;
-        await this._ctx.issueCommand({
-            type: "command:scene:delete-drawdy-preview-elements",
-            ...stamp(this._ctx),
-            req: { previewIds: [previewId] },
-        });
-    }
-}
-
 const SCENE_CHANGE_SUBSCRIPTIONS = [
     "subscription:scene:elements-added",
     "subscription:scene:elements-removed",
@@ -4243,6 +4638,17 @@ const SCENE_CHANGE_SUBSCRIPTIONS = [
     "subscription:scene:elements-replaced",
 ];
 let driver = null;
+function subscribeClick(ctx, domElementId) {
+    void ctx
+        .issueCommand({
+        type: "subscription:dom:element-clicked",
+        ...stamp(ctx),
+        req: { domElementId },
+    })
+        .catch(() => undefined);
+}
+const DOUBLE_CLICK_MS = 400;
+let lastBarClick = null;
 const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
     let requestId = 0;
     const ctx = {
@@ -4251,10 +4657,9 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         generateId,
         nextRequestId: () => String(requestId++),
     };
-    const playhead = new Playhead(ctx, styling);
-    const transport = new TransportBar(ctx, styling);
-    const session = new SereneSession(ctx, playhead, transport, styling);
-    driver = { ctx, session, transport, styling };
+    const overlay = new FrameOverlay(ctx, styling, (domId) => subscribeClick(ctx, domId));
+    const session = new SereneSession(ctx, overlay, styling);
+    driver = { ctx, session, overlay, styling };
     await session.restoreSettings();
     unwrap(await issueCommand({
         type: "command:dom:create-action-button",
@@ -4274,91 +4679,55 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         ...stamp(ctx),
         req: { webviewDomId: panelWebviewId(ctx.driverId) },
     }));
-    unwrap(await issueCommand({
-        type: "subscription:dom:theme-changed",
-        ...stamp(ctx),
-    }));
-    unwrap(await issueCommand({
-        type: "subscription:scene:pointer-position",
-        ...stamp(ctx),
-    }));
-    await subscribeTransport(ctx, transport);
-};
-async function subscribeTransport(ctx, transport) {
-    unwrap(await ctx.issueCommand({
-        type: "subscription:scene:drawdy-element-selection",
-        ...stamp(ctx),
-    }));
-    unwrap(await ctx.issueCommand({
-        type: "subscription:scene:drawdy-elements-dragged",
-        ...stamp(ctx),
-    }));
+    for (const type of [
+        "subscription:dom:theme-changed",
+        "subscription:scene:pointer-position",
+        "subscription:scene:drawdy-element-selection",
+        "subscription:scene:drawdy-elements-dragged",
+        "subscription:camera:moved-rapid",
+        "subscription:tool:laser",
+    ]) {
+        unwrap(await issueCommand({ type, ...stamp(ctx) }));
+    }
     for (const type of SCENE_CHANGE_SUBSCRIPTIONS) {
-        unwrap(await ctx.issueCommand({
+        unwrap(await issueCommand({
             type,
             ...stamp(ctx),
             req: { properties: FRAME_PROPERTIES },
         }));
     }
-    unwrap(await ctx.issueCommand({
-        type: "subscription:camera:moved-rapid",
-        ...stamp(ctx),
-    }));
-    unwrap(await ctx.issueCommand({
-        type: "subscription:tool:laser",
-        ...stamp(ctx),
-    }));
-    unwrap(await ctx.issueCommand({
-        type: "subscription:scene:click",
-        ...stamp(ctx),
-        req: { elementIds: transport.clickIds },
-    }));
-    unwrap(await ctx.issueCommand({
-        type: "subscription:scene:pointer",
-        ...stamp(ctx),
-        req: { elementIds: transport.hitIds },
-    }));
-    const camera = unwrap(await ctx.issueCommand({
-        type: "command:camera:get-info",
-        ...stamp(ctx),
-    }));
-    transport.setZoom(camera.zoom);
-    await syncTransportWithSelection(ctx, transport);
-}
-async function syncTransportWithSelection(ctx, transport) {
+    const camera = unwrap(await issueCommand({ type: "command:camera:get-info", ...stamp(ctx) }));
+    overlay.setZoom(camera.zoom);
+    await syncSelection(ctx, session);
+    await session.postFrames();
+};
+async function syncSelection(ctx, session) {
     const { drawdyElementIds } = unwrap(await ctx.issueCommand({
         type: "command:scene:get-current-selected-drawdy-elements",
         ...stamp(ctx),
     }));
-    const foreign = drawdyElementIds.filter((id) => !transport.ownIds.includes(id));
-    transport.setSelection(foreign);
-    driver?.session.setSelection(foreign);
+    session.setSelection(drawdyElementIds);
 }
 const onEvent = async (event) => {
     if (!driver)
         return;
-    const { ctx, session, transport } = driver;
+    const { ctx, session, overlay } = driver;
     switch (event.type) {
         case "subscription:scene:pointer-position": {
-            if (transport.isDragging) {
-                transport.dragTo(event.body.position.canvasSpace.x);
-            }
+            const { x, y } = event.body.position.canvasSpace;
+            overlay.setPointer(x, y);
             return;
         }
         case "subscription:scene:drawdy-element-selection": {
-            const ids = event.body.drawdyElementIds;
-            const foreign = ids.filter((id) => !transport.ownIds.includes(id));
-            if (foreign.length === 0 && ids.length > 0)
-                return;
-            transport.setSelection(foreign);
-            session.setSelection(foreign);
+            session.setSelection([...event.body.drawdyElementIds]);
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
             if (event.body.type === "dragStart")
-                transport.hideWhileDragging();
+                overlay.setDragging(true);
             if (event.body.type === "dragEnd") {
-                await syncTransportWithSelection(ctx, transport);
+                overlay.setDragging(false);
+                session.scheduleFrames();
             }
             return;
         }
@@ -4372,8 +4741,8 @@ const onEvent = async (event) => {
                     ? event.body.replaced
                     : []),
             ];
+            overlay.onSceneChanged(changed);
             session.scheduleFrames();
-            transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
             return;
         }
@@ -4382,64 +4751,31 @@ const onEvent = async (event) => {
             return;
         }
         case "subscription:camera:moved-rapid": {
-            transport.setZoom(event.body.zoom);
-            return;
-        }
-        case "subscription:scene:pointer": {
-            const body = event.body;
-            if (body.type === "cancel") {
-                transport.cancelDrag();
-                transport.setButtonHovered(false);
-                transport.setKnobHovered(false);
-                return;
-            }
-            const ids = body.drawdyElementIds;
-            if (body.type === "down") {
-                if (ids.includes(transport.knobId)) {
-                    await transport.beginDrag(body.cursor.canvasSpace.x);
-                }
-                return;
-            }
-            if (body.type === "up") {
-                const progress = transport.endDrag();
-                if (progress !== null)
-                    session.seek(progress);
-                return;
-            }
-            const entering = body.type === "enter";
-            if (ids.includes(transport.buttonId)) {
-                transport.setButtonHovered(entering);
-            }
-            if (ids.includes(transport.knobId)) {
-                transport.setKnobHovered(entering);
-            }
-            return;
-        }
-        case "subscription:scene:click": {
-            if (transport.isDragging)
-                return;
-            const clicked = event.body.drawdyElementIds;
-            if (clicked.includes(transport.knobId))
-                return;
-            if (clicked.some((id) => transport.trackIds.includes(id))) {
-                const progress = transport.jumpTo(event.body.cursor.canvasSpace.x);
-                if (progress !== null)
-                    session.seek(progress);
-                return;
-            }
-            if (!clicked.includes(transport.buttonId))
-                return;
-            if (transport.mode === "stop") {
-                await session.stop();
-                return;
-            }
-            await session.play(transport.seedIds);
+            overlay.setZoom(event.body.zoom);
             return;
         }
         case "subscription:dom:element-clicked": {
-            if (event.body.domElementId !== actionButtonId(ctx.driverId))
+            const domId = event.body.domElementId;
+            if (domId === actionButtonId(ctx.driverId)) {
+                await session.openFromRail();
                 return;
-            await session.openFromRail();
+            }
+            const sampleFrame = overlay.frameForSample(domId);
+            if (sampleFrame) {
+                await session.addSample(sampleFrame);
+                return;
+            }
+            const barFrame = overlay.frameForBar(domId);
+            if (!barFrame)
+                return;
+            // The host reports single clicks only; two on one bar in quick succession rename.
+            const now = Date.now();
+            const double = lastBarClick?.frameId === barFrame && now - lastBarClick.at < DOUBLE_CLICK_MS;
+            lastBarClick = double ? null : { frameId: barFrame, at: now };
+            if (double)
+                await session.editFrameName(barFrame);
+            else
+                await session.selectFrame(barFrame);
             return;
         }
         case "subscription:webview:message": {

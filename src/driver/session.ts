@@ -2,10 +2,18 @@ import { ModuleStyling, SubscribedDrawdyElement } from "@drawdy/driver-protocol"
 import { Rect, rectsOverlap } from "../score/geometry";
 import { Ink, elementBounds, laserInk, sceneInk } from "../score/ink";
 import { getScale, normalizeRange } from "../score/pitch";
-import { Score, buildScore, playheadX } from "../score/score";
+import { Score, buildScore } from "../score/score";
 import { Ctx } from "./context";
 import { frameSummaries } from "./frame-list";
-import { addSereneFrame, selectAndFlyTo } from "./frames";
+import { FrameOverlay } from "./frame-overlay";
+import {
+    MAX_FRAME_NAME,
+    addSereneFrame,
+    renameFrame,
+    selectAndFlyTo,
+    selectFrame,
+    sereneFramesAmong,
+} from "./frames";
 import {
     PanelToDriver,
     backingOptions,
@@ -15,7 +23,7 @@ import {
     serializeScore,
     stylingCssVars,
 } from "./panel";
-import { Playhead } from "./playhead";
+import { addSample } from "./sample";
 import { resolveTarget } from "./target";
 import {
     DEFAULT_SETTINGS,
@@ -27,15 +35,10 @@ import {
     saveSettings,
     speedToPxPerSecond,
 } from "./settings";
-import { TransportBar } from "./transport-bar";
 
 const EMPTY_REGION: Rect = { x: 0, y: 0, width: 1, height: 1 };
 const REFRESH_DEBOUNCE_MS = 120;
 const FRAME_LIST_DEBOUNCE_MS = 250;
-
-function sameRect(a: Rect, b: Rect): boolean {
-    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
 
 export class SereneSession {
     private _score: Score | null = null;
@@ -51,21 +54,32 @@ export class SereneSession {
     private _frameListTimer: ReturnType<typeof setTimeout> | null = null;
     private _panelOpened = false;
     private _selection: string[] = [];
+    private _pendingRename: string | null = null;
 
     public constructor(
         private readonly _ctx: Ctx,
-        private readonly _playhead: Playhead,
-        private readonly _transport: TransportBar,
+        private readonly _overlay: FrameOverlay,
         private _styling: ModuleStyling
     ) {}
 
     public async restoreSettings(): Promise<void> {
         this._settings = await loadSettings(this._ctx);
+        this._syncOverlaySettings();
     }
 
     private _updateSettings(patch: Partial<SereneSettings>): void {
         this._settings = { ...this._settings, ...patch };
         saveSettings(this._ctx, this._settings);
+        this._syncOverlaySettings();
+    }
+
+    private _syncOverlaySettings(): void {
+        this._overlay.setSettings({
+            pxPerSecond: speedToPxPerSecond(this._settings.speed),
+            lowOctave: this._settings.lowOctave,
+            highOctave: this._settings.highOctave,
+            stepsPerOctave: getScale(this._settings.scale).steps.length,
+        });
     }
 
     public postSettings(): void {
@@ -74,8 +88,7 @@ export class SereneSession {
 
     public setStyling(styling: ModuleStyling): void {
         this._styling = styling;
-        this._playhead.setStyling(styling);
-        this._transport.setStyling(styling);
+        this._overlay.setStyling(styling);
     }
 
     public async openPanel(): Promise<void> {
@@ -98,14 +111,21 @@ export class SereneSession {
     }
 
     public async postFrames(): Promise<void> {
-        if (!this._panelOpened) return;
         const frames = await frameSummaries(this._ctx);
+        this._overlay.setFrames(
+            frames.map((frame) => ({
+                id: frame.id,
+                name: frame.name,
+                rect: { x: frame.x, y: frame.y, width: frame.width, height: frame.height },
+                empty: frame.strokes.length === 0,
+            }))
+        );
+        if (!this._panelOpened) return;
         postToPanel(this._ctx, { type: "frames", frames });
     }
 
-    /** Thumbnails follow the board; coalesce bursts of scene changes. */
+    /** Names, thumbnails and empty states follow the board; coalesce bursts of changes. */
     public scheduleFrames(): void {
-        if (!this._panelOpened) return;
         if (this._frameListTimer) clearTimeout(this._frameListTimer);
         this._frameListTimer = setTimeout(() => {
             this._frameListTimer = null;
@@ -115,6 +135,7 @@ export class SereneSession {
 
     public setSelection(ids: string[]): void {
         this._selection = ids;
+        this._overlay.setSelection(ids);
         if (!this._panelOpened) return;
         postToPanel(this._ctx, { type: "selection", ids });
     }
@@ -196,32 +217,40 @@ export class SereneSession {
     }
 
     private async _refresh(): Promise<void> {
-        const previous = this._rect;
         const resolved = await this._resolve(this._frameIds);
         if (!resolved) {
-            if (this._playing) await this.stop();
+            if (this._playing) this.stop();
             this._postScore(false);
             return;
-        }
-        const rect = this._rect;
-        if (this._playing && rect && previous && !sameRect(rect, previous)) {
-            await this._playhead.show(rect);
-            this._transport.setPlaying(rect);
         }
         this._postScore(false, true);
     }
 
-    public seek(progress: number): void {
-        if (!this._score) return;
-        postToPanel(this._ctx, {
-            type: "seek",
-            t: progress * this._score.durationSec,
-        });
+    public stop(): void {
+        postToPanel(this._ctx, { type: "stop" });
+        this._overlay.setActive(null, false);
     }
 
-    public async stop(): Promise<void> {
-        postToPanel(this._ctx, { type: "stop" });
-        await this._playhead.hide();
+    public async selectFrame(frameId: string): Promise<void> {
+        await selectFrame(this._ctx, frameId);
+    }
+
+    /** Double-click on a frame bar: rename it in the panel's Frames list. */
+    public async editFrameName(frameId: string): Promise<void> {
+        await selectFrame(this._ctx, frameId);
+        // A panel opened just now has not loaded yet; "ready" sends this again.
+        this._pendingRename = frameId;
+        await this.openPanel();
+        this.postTheme();
+        await this.postFrames();
+        postToPanel(this._ctx, { type: "edit-frame-name", id: frameId });
+    }
+
+    public async addSample(frameId: string): Promise<void> {
+        const [frame] = await sereneFramesAmong(this._ctx, [frameId]);
+        const rect = frame ? elementBounds(frame) : null;
+        if (!rect) return;
+        await addSample(this._ctx, rect);
     }
 
     public async onPanelMessage(message: PanelToDriver): Promise<void> {
@@ -233,6 +262,10 @@ export class SereneSession {
                 this.postBacking();
                 void this.postFrames();
                 postToPanel(this._ctx, { type: "selection", ids: this._selection });
+                if (this._pendingRename) {
+                    postToPanel(this._ctx, { type: "edit-frame-name", id: this._pendingRename });
+                    this._pendingRename = null;
+                }
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
@@ -242,34 +275,34 @@ export class SereneSession {
             case "started":
                 this._pendingAutoplay = false;
                 this._playing = true;
-                if (this._rect) await this._playhead.show(this._rect);
-                this._transport.setPlaying(this._rect);
+                this._overlay.setActive(this._frameIds[0] ?? null, true);
                 return;
             case "progress":
-                if (this._score) {
-                    this._playhead.move(playheadX(this._score, message.t));
-                    this._transport.setProgress(
-                        this._score.durationSec > 0
-                            ? message.t / this._score.durationSec
-                            : 0
-                    );
+                if (this._score && this._score.durationSec > 0) {
+                    this._overlay.setProgress(message.t / this._score.durationSec);
                 }
                 return;
             case "paused":
-                // The playhead holds where it stopped; the bar offers Play again.
+                // The playhead holds where it stopped.
                 this._playing = false;
-                this._transport.setPlaying(null);
+                this._overlay.setActive(this._frameIds[0] ?? null, false);
                 return;
             case "ended":
             case "stopped":
                 this._playing = false;
-                this._transport.setPlaying(null);
-                this._transport.setProgress(0);
-                await this._playhead.hide();
+                this._overlay.setActive(null, false);
                 return;
             case "add-frame":
                 await this.addFrame();
                 return;
+            case "rename-frame": {
+                const name =
+                    typeof message.name === "string" ? message.name.trim().slice(0, MAX_FRAME_NAME) : "";
+                if (!name) return;
+                await renameFrame(this._ctx, message.id, name);
+                await this.postFrames();
+                return;
+            }
             case "focus-frame":
                 await selectAndFlyTo(this._ctx, message.id);
                 return;
@@ -280,6 +313,7 @@ export class SereneSession {
                 this._updateSettings(
                     normalizeRange(message.low, message.high, this._settings)
                 );
+                this._overlay.previewRange();
                 if (!this._rect) return;
                 this._rebuild();
                 this._postScore(false, true);

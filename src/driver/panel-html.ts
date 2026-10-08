@@ -428,6 +428,20 @@ button.section-head { cursor: pointer; }
 .frame-text { flex: 1; min-width: 0; }
 .frame-name { display: flex; align-items: center; gap: 6px; }
 .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-input {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: -2px 0 -2px -4px;
+    padding: 0 4px;
+    font: inherit;
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+}
+.name-input:focus-visible, .name-input:focus { box-shadow: 0 0 0 2px var(--ring); }
 .frame-dur { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .eq { display: none; align-items: flex-end; gap: 1.5px; height: 10px; }
 .frame-row.playing .eq { display: inline-flex; }
@@ -1949,7 +1963,7 @@ button.section-head { cursor: pointer; }
         text.innerHTML =
             '<div class="frame-name"><span class="name-text"></span><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></div>' +
             '<div class="frame-dur"></div>';
-        text.querySelector(".name-text").textContent = frame.name;
+        bindName(text.querySelector(".name-text"), frame);
         row.appendChild(text);
 
         var play = document.createElement("button");
@@ -1958,11 +1972,18 @@ button.section-head { cursor: pointer; }
         row.appendChild(play);
 
         row.addEventListener("click", function (event) {
-            if (event.target.closest(".play")) return;
+            // The second click of a double-click on the name starts a rename instead.
+            if (event.target.closest(".play, .name-input") || event.detail > 1) return;
             api.postMessage({ type: "focus-frame", id: frame.id });
         });
         row.addEventListener("keydown", function (event) {
-            if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+            if (event.target !== row) return;
+            if (event.key === "F2") {
+                event.preventDefault();
+                startRename(frame.id);
+                return;
+            }
+            if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             api.postMessage({ type: "focus-frame", id: frame.id });
         });
@@ -1970,6 +1991,90 @@ button.section-head { cursor: pointer; }
             playFrame(frame.id);
         });
         return row;
+    }
+
+    function bindName(el, frame) {
+        el.textContent = frame.name;
+        el.addEventListener("dblclick", function (event) {
+            event.stopPropagation();
+            startRename(frame.id);
+        });
+        bindTip(el, function () { return editing ? "" : "Double-click to rename"; });
+    }
+
+    function frameById(id) {
+        for (var i = 0; i < frames.length; i++) if (frames[i].id === id) return frames[i];
+        return null;
+    }
+
+    function rowById(id) {
+        var rows = frameList.children;
+        for (var i = 0; i < rows.length; i++) if (rows[i].dataset.id === id) return rows[i];
+        return null;
+    }
+
+    // Rename in place: Enter or blur saves, Esc cancels, an empty name is ignored.
+    var editing = null;
+    var pendingRenameId = null;
+
+    function startRename(id, draft) {
+        var frame = frameById(id);
+        var row = rowById(id);
+        if (!frame || !row) {
+            pendingRenameId = id;
+            return;
+        }
+        pendingRenameId = null;
+        if (editing && editing.id === id) {
+            editing.input.focus();
+            return;
+        }
+        if (editing) editing.finish(true);
+        hideTip();
+        var nameEl = row.querySelector(".name-text");
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "name-input";
+        input.maxLength = 60;
+        input.spellcheck = false;
+        input.setAttribute("aria-label", "Frame name");
+        input.value = draft === undefined ? frame.name : draft;
+        nameEl.replaceWith(input);
+        var done = false;
+        function finish(commit, refocus) {
+            if (done) return;
+            done = true;
+            editing = null;
+            var next = input.value.trim();
+            if (commit && next && next !== frame.name) {
+                frame.name = next;
+                api.postMessage({ type: "rename-frame", id: id, name: next });
+            }
+            if (!input.isConnected) return;
+            var span = document.createElement("span");
+            span.className = "name-text";
+            bindName(span, frame);
+            input.replaceWith(span);
+            renderRowStates();
+            if (refocus) row.focus({ preventScroll: true });
+        }
+        editing = { id: id, input: input, finish: finish, drop: function () { done = true; editing = null; } };
+        input.addEventListener("keydown", function (event) {
+            event.stopPropagation();
+            if (event.key === "Enter") {
+                event.preventDefault();
+                finish(true, true);
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                finish(false, true);
+            }
+        });
+        input.addEventListener("blur", function () { finish(true); });
+        input.addEventListener("click", function (event) { event.stopPropagation(); });
+        input.addEventListener("dblclick", function (event) { event.stopPropagation(); });
+        input.focus({ preventScroll: true });
+        if (draft === undefined) input.select();
+        row.scrollIntoView({ block: "nearest" });
     }
 
     function playFrame(id) {
@@ -2017,6 +2122,9 @@ button.section-head { cursor: pointer; }
         var focusRow = active && active.closest ? active.closest(".frame-row") : null;
         var focusId = focusRow ? focusRow.dataset.id : null;
         var focusPlay = Boolean(focusRow) && active.classList.contains("play");
+        // A list refresh rebuilds the rows; carry an unfinished rename across it.
+        var draft = editing ? { id: editing.id, value: editing.input.value } : null;
+        if (editing) editing.drop();
         frameList.textContent = "";
         frames.forEach(function (frame) {
             frameList.appendChild(buildRow(frame));
@@ -2028,6 +2136,8 @@ button.section-head { cursor: pointer; }
                 (focusPlay ? row.querySelector(".play") : row).focus({ preventScroll: true });
             });
         }
+        if (draft) startRename(draft.id, draft.value);
+        else if (pendingRenameId) startRename(pendingRenameId);
         if (any) layoutSliders();
     }
 
@@ -2104,6 +2214,9 @@ button.section-head { cursor: pointer; }
             case "frames":
                 frames = msg.frames;
                 renderFrames();
+                return;
+            case "edit-frame-name":
+                startRename(msg.id);
                 return;
             case "selection":
                 selectedIds = msg.ids;

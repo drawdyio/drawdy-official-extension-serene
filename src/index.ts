@@ -1,15 +1,14 @@
 import { DriverModule, ModuleStyling } from "@drawdy/driver-protocol";
 import { Ctx, stamp, unwrap } from "./driver/context";
+import { FrameOverlay } from "./driver/frame-overlay";
+import { FRAME_PROPERTIES } from "./driver/frames";
 import {
     ACTION_BUTTON_SVG,
     PanelToDriver,
     actionButtonId,
     panelWebviewId,
 } from "./driver/panel";
-import { Playhead } from "./driver/playhead";
 import { SereneSession } from "./driver/session";
-import { FRAME_PROPERTIES } from "./driver/frames";
-import { TransportBar } from "./driver/transport-bar";
 
 const SCENE_CHANGE_SUBSCRIPTIONS = [
     "subscription:scene:elements-added",
@@ -21,9 +20,22 @@ const SCENE_CHANGE_SUBSCRIPTIONS = [
 let driver: {
     ctx: Ctx;
     session: SereneSession;
-    transport: TransportBar;
+    overlay: FrameOverlay;
     styling: ModuleStyling;
 } | null = null;
+
+function subscribeClick(ctx: Ctx, domElementId: string): void {
+    void ctx
+        .issueCommand({
+            type: "subscription:dom:element-clicked",
+            ...stamp(ctx),
+            req: { domElementId },
+        })
+        .catch(() => undefined);
+}
+
+const DOUBLE_CLICK_MS = 400;
+let lastBarClick: { frameId: string; at: number } | null = null;
 
 export const activate: DriverModule["activate"] = async ({
     manifest,
@@ -38,10 +50,9 @@ export const activate: DriverModule["activate"] = async ({
         generateId,
         nextRequestId: () => String(requestId++),
     };
-    const playhead = new Playhead(ctx, styling);
-    const transport = new TransportBar(ctx, styling);
-    const session = new SereneSession(ctx, playhead, transport, styling);
-    driver = { ctx, session, transport, styling };
+    const overlay = new FrameOverlay(ctx, styling, (domId) => subscribeClick(ctx, domId));
+    const session = new SereneSession(ctx, overlay, styling);
+    driver = { ctx, session, overlay, styling };
     await session.restoreSettings();
 
     unwrap(
@@ -68,121 +79,63 @@ export const activate: DriverModule["activate"] = async ({
             req: { webviewDomId: panelWebviewId(ctx.driverId) },
         })
     );
-    unwrap(
-        await issueCommand({
-            type: "subscription:dom:theme-changed",
-            ...stamp(ctx),
-        })
-    );
-    unwrap(
-        await issueCommand({
-            type: "subscription:scene:pointer-position",
-            ...stamp(ctx),
-        })
-    );
-
-    await subscribeTransport(ctx, transport);
-};
-
-async function subscribeTransport(
-    ctx: Ctx,
-    transport: TransportBar
-): Promise<void> {
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:scene:drawdy-element-selection",
-            ...stamp(ctx),
-        })
-    );
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:scene:drawdy-elements-dragged",
-            ...stamp(ctx),
-        })
-    );
+    for (const type of [
+        "subscription:dom:theme-changed",
+        "subscription:scene:pointer-position",
+        "subscription:scene:drawdy-element-selection",
+        "subscription:scene:drawdy-elements-dragged",
+        "subscription:camera:moved-rapid",
+        "subscription:tool:laser",
+    ] as const) {
+        unwrap(await issueCommand({ type, ...stamp(ctx) }));
+    }
     for (const type of SCENE_CHANGE_SUBSCRIPTIONS) {
         unwrap(
-            await ctx.issueCommand({
+            await issueCommand({
                 type,
                 ...stamp(ctx),
                 req: { properties: FRAME_PROPERTIES },
             })
         );
     }
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:camera:moved-rapid",
-            ...stamp(ctx),
-        })
-    );
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:tool:laser",
-            ...stamp(ctx),
-        })
-    );
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:scene:click",
-            ...stamp(ctx),
-            req: { elementIds: transport.clickIds },
-        })
-    );
-    unwrap(
-        await ctx.issueCommand({
-            type: "subscription:scene:pointer",
-            ...stamp(ctx),
-            req: { elementIds: transport.hitIds },
-        })
-    );
-    const camera = unwrap(
-        await ctx.issueCommand({
-            type: "command:camera:get-info",
-            ...stamp(ctx),
-        })
-    );
-    transport.setZoom(camera.zoom);
-    await syncTransportWithSelection(ctx, transport);
-}
 
-async function syncTransportWithSelection(
-    ctx: Ctx,
-    transport: TransportBar
-): Promise<void> {
+    const camera = unwrap(
+        await issueCommand({ type: "command:camera:get-info", ...stamp(ctx) })
+    );
+    overlay.setZoom(camera.zoom);
+    await syncSelection(ctx, session);
+    await session.postFrames();
+};
+
+async function syncSelection(ctx: Ctx, session: SereneSession): Promise<void> {
     const { drawdyElementIds } = unwrap(
         await ctx.issueCommand({
             type: "command:scene:get-current-selected-drawdy-elements",
             ...stamp(ctx),
         })
     );
-    const foreign = drawdyElementIds.filter((id) => !transport.ownIds.includes(id));
-    transport.setSelection(foreign);
-    driver?.session.setSelection(foreign);
+    session.setSelection(drawdyElementIds);
 }
 
 export const onEvent: DriverModule["onEvent"] = async (event) => {
     if (!driver) return;
-    const { ctx, session, transport } = driver;
+    const { ctx, session, overlay } = driver;
 
     switch (event.type) {
         case "subscription:scene:pointer-position": {
-            if (transport.isDragging) {
-                transport.dragTo(event.body.position.canvasSpace.x);
-            }
+            const { x, y } = event.body.position.canvasSpace;
+            overlay.setPointer(x, y);
             return;
         }
         case "subscription:scene:drawdy-element-selection": {
-            const ids = event.body.drawdyElementIds;
-            const foreign = ids.filter((id) => !transport.ownIds.includes(id));
-            if (foreign.length === 0 && ids.length > 0) return;
-            transport.setSelection(foreign);
-            session.setSelection(foreign);
+            session.setSelection([...event.body.drawdyElementIds]);
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
-            if (event.body.type === "dragStart") transport.hideWhileDragging();
+            if (event.body.type === "dragStart") overlay.setDragging(true);
             if (event.body.type === "dragEnd") {
-                await syncTransportWithSelection(ctx, transport);
+                overlay.setDragging(false);
+                session.scheduleFrames();
             }
             return;
         }
@@ -196,8 +149,8 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
                     ? event.body.replaced
                     : []),
             ];
+            overlay.onSceneChanged(changed);
             session.scheduleFrames();
-            transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
             return;
         }
@@ -206,58 +159,29 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
             return;
         }
         case "subscription:camera:moved-rapid": {
-            transport.setZoom(event.body.zoom);
-            return;
-        }
-        case "subscription:scene:pointer": {
-            const body = event.body;
-            if (body.type === "cancel") {
-                transport.cancelDrag();
-                transport.setButtonHovered(false);
-                transport.setKnobHovered(false);
-                return;
-            }
-            const ids = body.drawdyElementIds;
-            if (body.type === "down") {
-                if (ids.includes(transport.knobId)) {
-                    await transport.beginDrag(body.cursor.canvasSpace.x);
-                }
-                return;
-            }
-            if (body.type === "up") {
-                const progress = transport.endDrag();
-                if (progress !== null) session.seek(progress);
-                return;
-            }
-            const entering = body.type === "enter";
-            if (ids.includes(transport.buttonId)) {
-                transport.setButtonHovered(entering);
-            }
-            if (ids.includes(transport.knobId)) {
-                transport.setKnobHovered(entering);
-            }
-            return;
-        }
-        case "subscription:scene:click": {
-            if (transport.isDragging) return;
-            const clicked = event.body.drawdyElementIds;
-            if (clicked.includes(transport.knobId)) return;
-            if (clicked.some((id) => transport.trackIds.includes(id))) {
-                const progress = transport.jumpTo(event.body.cursor.canvasSpace.x);
-                if (progress !== null) session.seek(progress);
-                return;
-            }
-            if (!clicked.includes(transport.buttonId)) return;
-            if (transport.mode === "stop") {
-                await session.stop();
-                return;
-            }
-            await session.play(transport.seedIds);
+            overlay.setZoom(event.body.zoom);
             return;
         }
         case "subscription:dom:element-clicked": {
-            if (event.body.domElementId !== actionButtonId(ctx.driverId)) return;
-            await session.openFromRail();
+            const domId = event.body.domElementId;
+            if (domId === actionButtonId(ctx.driverId)) {
+                await session.openFromRail();
+                return;
+            }
+            const sampleFrame = overlay.frameForSample(domId);
+            if (sampleFrame) {
+                await session.addSample(sampleFrame);
+                return;
+            }
+            const barFrame = overlay.frameForBar(domId);
+            if (!barFrame) return;
+            // The host reports single clicks only; two on one bar in quick succession rename.
+            const now = Date.now();
+            const double =
+                lastBarClick?.frameId === barFrame && now - lastBarClick.at < DOUBLE_CLICK_MS;
+            lastBarClick = double ? null : { frameId: barFrame, at: now };
+            if (double) await session.editFrameName(barFrame);
+            else await session.selectFrame(barFrame);
             return;
         }
         case "subscription:webview:message": {

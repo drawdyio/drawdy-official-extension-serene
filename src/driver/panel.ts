@@ -67,7 +67,8 @@ export type PanelToDriver =
     | { type: "backing"; value: Record<string, unknown> }
     | { type: "add-frame" }
     | { type: "focus-frame"; id: string }
-    | { type: "play-frame"; id: string };
+    | { type: "play-frame"; id: string }
+    | { type: "rename-frame"; id: string; name: string };
 
 export type DriverToPanel =
     | { type: "theme"; css: string }
@@ -75,6 +76,7 @@ export type DriverToPanel =
     | { type: "score"; score: SerializedScore; autoplay: boolean; live?: boolean }
     | { type: "frames"; frames: FrameSummary[] }
     | { type: "selection"; ids: string[] }
+    | { type: "edit-frame-name"; id: string }
     | { type: "settings"; values: SereneSettings }
     | { type: "seek"; t: number }
     | { type: "backing"; options: BackingOption[]; value: BackingSettings }

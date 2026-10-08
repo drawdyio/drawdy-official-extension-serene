@@ -46,13 +46,40 @@ fits it. Drivers cannot read or set a Drawdy frame's own name, so the Serene
 name lives in `meta.serene.name`; frames from before names existed are listed
 as "Serene {position}".
 
-When exactly one Serene frame is selected, a transport bar floats above its top
-edge: a round play button on the left and a seek track spanning the frame's
-width, with a knob that follows playback. Press the button to play the frame;
-while it plays it turns into a stop button and the bar stays pinned to the
-frame being played. Click anywhere on the track to jump there, or drag the knob; a drag lands when you release,
-whether the frame is playing or paused, and the voices under the new position
-pick up mid-note without a fresh attack.
+Every Serene frame carries a bar above its top-left corner with the Serene
+icon, the frame's name and its time: the duration (`0:04.8`) when idle, and
+`elapsed / duration` while it plays or is paused part way. When zoomed out
+the bar shrinks (to 85% at most) and never runs wider than its frame: it
+drops the time, then shortens the name, then shows only the icon. New frames
+set `meta.hideFrameLabel` so Drawdy skips its own name chip, and frames from
+before that flag existed get it (and their name) the first time Serene lists
+them; a Drawdy build without support for the flag still draws its chip under
+the bar.
+
+Clicking the bar selects its frame; double-clicking it opens the panel with
+that frame's name ready to edit in the Frames list, where a double-click on a
+row's name (or F2 on a focused row) does the same. Enter or clicking away
+saves, Esc cancels, and an empty name is ignored.
+
+While a frame is hovered, selected or playing, or while Range is being
+dragged in the panel (and for 600 ms after), it shows its guides:
+
+- a time ruler along the top edge, with a tick every 0.5 s of playback time
+  (Speed applied) and whole seconds longer and labeled (`1s`, `2s`); labels
+  thin out when zoomed far out and stop 20 px short of the right edge;
+- a label for each C in the Range at the height that C plays (`C3`, `C4`),
+  kept clear of the ruler and the bottom edge.
+
+The playhead is a line with a pill-shaped handle straddling the top edge. It
+shows on a hovered, selected or active frame and is dimmed at 0 when idle.
+An empty frame says "Draw anywhere, then press play." with a **Try a sample**
+button that draws a short phrase into it.
+
+All of it is preview elements, so it pans and zooms with the board and stays
+under Drawdy's panels: ticks and the playhead are canvas lines, and the text
+(bar, labels, empty state) is `component` previews, DOM on the canvas's widget
+layer, so it gets the app's font and the real icon. Drawdy renders component
+previews only from the build that includes that change.
 
 ## What gets played
 
@@ -160,9 +187,8 @@ clipped samples unlimited, and 0.796 with none through the limiter.
 
 Audio lives in the panel's webview, which runs in a sandboxed opaque-origin
 iframe. Browsers require one real click inside that frame before a page may
-make sound, so the first play has to come from a play button in the panel's
-Frames list (it pulses when a play from the board was blocked). After that,
-the on-canvas play button starts playback on its own.
+make sound, so playback starts from the play buttons in the panel's
+Frames list.
 
 ## Develop
 

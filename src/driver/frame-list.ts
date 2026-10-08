@@ -2,7 +2,7 @@ import { SubscribeableKey } from "@drawdy/driver-protocol";
 import { Polyline, Rect, evenPick } from "../score/geometry";
 import { elementBounds, elementInk } from "../score/ink";
 import { Ctx, stamp, unwrap } from "./context";
-import { frameNames, listSereneFrames } from "./frames";
+import { frameNames, listSereneFrames, migrateFrames } from "./frames";
 import { INK_PROPERTIES, dropStageElements } from "./target";
 
 // Thumbnails are drawn in a viewBox this wide, height following the frame.
@@ -20,6 +20,8 @@ export type ThumbStroke = { d: string; color: string | null };
 export type FrameSummary = {
     id: string;
     name: string;
+    x: number;
+    y: number;
     width: number;
     height: number;
     strokes: ThumbStroke[];
@@ -67,6 +69,7 @@ async function thumbStrokes(ctx: Ctx, frameId: string, rect: Rect): Promise<Thum
 export async function frameSummaries(ctx: Ctx): Promise<FrameSummary[]> {
     const frames = await listSereneFrames(ctx);
     const names = frameNames(frames);
+    void migrateFrames(ctx, frames, names).catch(() => undefined);
     const summaries = await Promise.all(
         frames.map(async (frame, index): Promise<FrameSummary | null> => {
             const rect = elementBounds(frame);
@@ -74,6 +77,8 @@ export async function frameSummaries(ctx: Ctx): Promise<FrameSummary[]> {
             return {
                 id: frame.id,
                 name: names[index],
+                x: rect.x,
+                y: rect.y,
                 width: rect.width,
                 height: rect.height,
                 strokes: await thumbStrokes(ctx, frame.id, rect),
