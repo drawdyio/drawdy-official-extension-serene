@@ -1,7 +1,7 @@
 {
   "driverId": "drawdy.serene",
   "driverName": "Serene",
-  "driverVersion": "1.4.0",
+  "driverVersion": "1.4.1",
   "description": "Play your drawing. Add a Serene frame from the panel, draw inside it, then press play: a playhead sweeps the frame and every stroke it crosses rings out as a sine tone, snapped to the scale you pick across a C3 to C6 range by default, or any range you pick between C1 and C8.",
   "icon": "assets/serene-icon-256.webp",
   "main": "main.js",
