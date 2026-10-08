@@ -72,8 +72,7 @@ dragged in the panel (and for 600 ms after), it shows its guides:
 
 The playhead is a line with a pill-shaped handle straddling the top edge. It
 shows on a hovered, selected or active frame and is dimmed at 0 when idle.
-An empty frame says "Draw anywhere, then press play." with a **Try a sample**
-button that draws a short phrase into it.
+An empty frame says "Draw anywhere, then press play."
 
 All of it is preview elements, so it pans and zooms with the board and stays
 under Drawdy's panels: ticks and the playhead are canvas lines, and the text

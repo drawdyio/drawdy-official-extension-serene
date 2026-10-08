@@ -12,7 +12,6 @@ import {
     renameFrame,
     selectAndFlyTo,
     selectFrame,
-    sereneFramesAmong,
 } from "./frames";
 import {
     PanelToDriver,
@@ -23,7 +22,6 @@ import {
     serializeScore,
     stylingCssVars,
 } from "./panel";
-import { addSample } from "./sample";
 import { resolveTarget } from "./target";
 import {
     DEFAULT_SETTINGS,
@@ -244,13 +242,6 @@ export class SereneSession {
         this.postTheme();
         await this.postFrames();
         postToPanel(this._ctx, { type: "edit-frame-name", id: frameId });
-    }
-
-    public async addSample(frameId: string): Promise<void> {
-        const [frame] = await sereneFramesAmong(this._ctx, [frameId]);
-        const rect = frame ? elementBounds(frame) : null;
-        if (!rect) return;
-        await addSample(this._ctx, rect);
     }
 
     public async onPanelMessage(message: PanelToDriver): Promise<void> {

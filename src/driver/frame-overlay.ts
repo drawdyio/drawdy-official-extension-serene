@@ -23,7 +23,7 @@ const EMPTY_MIN_WIDTH = 300;
 const EMPTY_MIN_HEIGHT = 140;
 const IDLE_PLAYHEAD_OPACITY = 0.4;
 const TERTIARY_OPACITY = 0.5;
-const EMPTY_HALF_HEIGHT = 31;
+const EMPTY_TEXT_HEIGHT = 24;
 // Text boxes at least this tall sit at their top whatever the host's line height.
 const LABEL_BOX = 24;
 
@@ -145,11 +145,6 @@ export class FrameOverlay {
 
     private _id(part: string, frameId: string): string {
         return `${this._ctx.driverId}:${part}:${frameId}`;
-    }
-
-    public frameForSample(domId: string): string | null {
-        const prefix = "serene-sample-";
-        return domId.startsWith(prefix) ? domId.slice(prefix.length) : null;
     }
 
     public frameForBar(domId: string): string | null {
@@ -584,45 +579,16 @@ export class FrameOverlay {
         const k = barScale(zoom);
         const { x, y, width, height } = frame.rect;
         if (width * zoom < EMPTY_MIN_WIDTH * k || height * zoom < EMPTY_MIN_HEIGHT * k) return [];
-        const sampleId = this._clickable(`serene-sample-${frame.id}`);
-        const s = this._styling;
         return [
             this._component(
                 this._id("empty", frame.id),
-                { x, y: y + height / 2 - (EMPTY_HALF_HEIGHT * k) / zoom },
-                { width: Math.round((width * zoom) / k), height: EMPTY_HALF_HEIGHT * 2 },
+                { x, y: y + height / 2 - (EMPTY_TEXT_HEIGHT * k) / 2 / zoom },
+                { width: Math.round((width * zoom) / k), height: EMPTY_TEXT_HEIGHT },
                 k,
                 {
-                    type: "column",
-                    styles: { gap: 10, crossAxisAlignment: "center" },
-                    children: [
-                        {
-                            type: "text",
-                            child: "Draw anywhere, then press play.",
-                            styles: { fontSize: [14, "px"], color: s.mutedForeground, textAlign: "center" },
-                        },
-                        {
-                            type: "button",
-                            domId: sampleId,
-                            styles: {
-                                padding: [6, "px"],
-                                borderRadius: [6, "px"],
-                                backgroundColor: "transparent",
-                                pointerEvents: "auto",
-                                cursor: "pointer",
-                                hover: {
-                                    backgroundColor: `color-mix(in srgb, ${s.foreground} 6%, transparent)`,
-                                },
-                            },
-                            children: [
-                                {
-                                    type: "text",
-                                    child: "Try a sample",
-                                    styles: { fontSize: [13, "px"], fontWeight: "medium", color: s.foreground },
-                                },
-                            ],
-                        },
-                    ],
+                    type: "text",
+                    child: "Draw anywhere, then press play.",
+                    styles: { fontSize: [14, "px"], color: this._styling.mutedForeground, textAlign: "center" },
                 }
             ),
         ];

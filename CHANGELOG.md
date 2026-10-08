@@ -21,7 +21,7 @@
 - Click the bar to select the frame; double-click it to rename the frame in the panel.
 - A time ruler and note labels show while a frame is hovered, selected or playing, and while Range is being adjusted.
 - New playhead with a handle on the frame's top edge. Pause keeps the position.
-- An empty frame shows "Draw anywhere, then press play." with a **Try a sample** button.
+- An empty frame shows "Draw anywhere, then press play."
 - New frames are named "Serene {n}" and placed to the right of the rightmost Serene frame.
 - New icon.
 

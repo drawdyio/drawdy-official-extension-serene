@@ -168,11 +168,6 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
                 await session.openFromRail();
                 return;
             }
-            const sampleFrame = overlay.frameForSample(domId);
-            if (sampleFrame) {
-                await session.addSample(sampleFrame);
-                return;
-            }
             const barFrame = overlay.frameForBar(domId);
             if (!barFrame) return;
             // The host reports single clicks only; two on one bar in quick succession rename.
