@@ -8,7 +8,7 @@ import {
 } from "./driver/panel";
 import { Playhead } from "./driver/playhead";
 import { SereneSession } from "./driver/session";
-import { FRAME_PROPERTIES, isSereneFrame } from "./driver/frames";
+import { FRAME_PROPERTIES } from "./driver/frames";
 import { TransportBar } from "./driver/transport-bar";
 
 const SCENE_CHANGE_SUBSCRIPTIONS = [
@@ -155,9 +155,9 @@ async function syncTransportWithSelection(
             ...stamp(ctx),
         })
     );
-    transport.setSelection(
-        drawdyElementIds.filter((id) => !transport.ownIds.includes(id))
-    );
+    const foreign = drawdyElementIds.filter((id) => !transport.ownIds.includes(id));
+    transport.setSelection(foreign);
+    driver?.session.setSelection(foreign);
 }
 
 export const onEvent: DriverModule["onEvent"] = async (event) => {
@@ -176,6 +176,7 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
             const foreign = ids.filter((id) => !transport.ownIds.includes(id));
             if (foreign.length === 0 && ids.length > 0) return;
             transport.setSelection(foreign);
+            session.setSelection(foreign);
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
@@ -195,9 +196,7 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
                     ? event.body.replaced
                     : []),
             ];
-            if (event.type !== "subscription:scene:elements-updated" && changed.some(isSereneFrame)) {
-                await session.postFrames();
-            }
+            session.scheduleFrames();
             transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
             return;

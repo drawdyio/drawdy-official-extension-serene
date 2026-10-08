@@ -2,14 +2,15 @@ import { ModuleStyling, SubscribedDrawdyElement } from "@drawdy/driver-protocol"
 import { Rect, rectsOverlap } from "../score/geometry";
 import { Ink, elementBounds, laserInk, sceneInk } from "../score/ink";
 import { getScale, normalizeRange } from "../score/pitch";
-import { Score, buildScore, clampSpeed, playheadX } from "../score/score";
+import { Score, buildScore, playheadX } from "../score/score";
 import { Ctx } from "./context";
-import { addSereneFrame, listSereneFrames } from "./frames";
+import { frameSummaries } from "./frame-list";
+import { addSereneFrame, selectAndFlyTo } from "./frames";
 import {
     PanelToDriver,
+    backingOptions,
     openPanel,
     postToPanel,
-    progressionNames,
     scaleOptions,
     serializeScore,
     stylingCssVars,
@@ -19,15 +20,18 @@ import { resolveTarget } from "./target";
 import {
     DEFAULT_SETTINGS,
     SereneSettings,
+    clampSpeed,
     loadSettings,
     sanitizeBacking,
     sanitizeKnobs,
     saveSettings,
+    speedToPxPerSecond,
 } from "./settings";
 import { TransportBar } from "./transport-bar";
 
 const EMPTY_REGION: Rect = { x: 0, y: 0, width: 1, height: 1 };
 const REFRESH_DEBOUNCE_MS = 120;
+const FRAME_LIST_DEBOUNCE_MS = 250;
 
 function sameRect(a: Rect, b: Rect): boolean {
     return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
@@ -44,6 +48,9 @@ export class SereneSession {
     private _frameIds: string[] = [];
     private _playing = false;
     private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    private _frameListTimer: ReturnType<typeof setTimeout> | null = null;
+    private _panelOpened = false;
+    private _selection: string[] = [];
 
     public constructor(
         private readonly _ctx: Ctx,
@@ -72,18 +79,14 @@ export class SereneSession {
     }
 
     public async openPanel(): Promise<void> {
+        this._panelOpened = true;
         await openPanel(this._ctx, this._styling);
     }
 
     public async openFromRail(): Promise<void> {
         await this.openPanel();
         this.postTheme();
-        const frames = await listSereneFrames(this._ctx);
-        if (frames.length === 0) {
-            await this.addFrame();
-            return;
-        }
-        this.postFrames(frames.length);
+        await this.postFrames();
     }
 
     public async addFrame(): Promise<void> {
@@ -94,15 +97,32 @@ export class SereneSession {
         }
     }
 
-    public async postFrames(count?: number): Promise<void> {
-        const total = count ?? (await listSereneFrames(this._ctx)).length;
-        postToPanel(this._ctx, { type: "frames", count: total });
+    public async postFrames(): Promise<void> {
+        if (!this._panelOpened) return;
+        const frames = await frameSummaries(this._ctx);
+        postToPanel(this._ctx, { type: "frames", frames });
+    }
+
+    /** Thumbnails follow the board; coalesce bursts of scene changes. */
+    public scheduleFrames(): void {
+        if (!this._panelOpened) return;
+        if (this._frameListTimer) clearTimeout(this._frameListTimer);
+        this._frameListTimer = setTimeout(() => {
+            this._frameListTimer = null;
+            void this.postFrames().catch(() => undefined);
+        }, FRAME_LIST_DEBOUNCE_MS);
+    }
+
+    public setSelection(ids: string[]): void {
+        this._selection = ids;
+        if (!this._panelOpened) return;
+        postToPanel(this._ctx, { type: "selection", ids });
     }
 
     public postBacking(): void {
         postToPanel(this._ctx, {
             type: "backing",
-            progressions: progressionNames(this._settings.scale),
+            options: backingOptions(),
             value: this._settings.backing,
         });
     }
@@ -212,6 +232,7 @@ export class SereneSession {
                 this.postScales();
                 this.postBacking();
                 void this.postFrames();
+                postToPanel(this._ctx, { type: "selection", ids: this._selection });
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
@@ -234,6 +255,11 @@ export class SereneSession {
                     );
                 }
                 return;
+            case "paused":
+                // The playhead holds where it stopped; the bar offers Play again.
+                this._playing = false;
+                this._transport.setPlaying(null);
+                return;
             case "ended":
             case "stopped":
                 this._playing = false;
@@ -243,6 +269,12 @@ export class SereneSession {
                 return;
             case "add-frame":
                 await this.addFrame();
+                return;
+            case "focus-frame":
+                await selectAndFlyTo(this._ctx, message.id);
+                return;
+            case "play-frame":
+                await this.play([message.id]);
                 return;
             case "range":
                 this._updateSettings(
@@ -266,11 +298,7 @@ export class SereneSession {
                 return;
             case "scale": {
                 const scale = getScale(message.value).id;
-                this._updateSettings({
-                    scale,
-                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
-                });
-                this.postBacking();
+                this._updateSettings({ scale });
                 if (!this._rect) return;
                 this._rebuild();
                 this._postScore(false, true);
@@ -278,11 +306,7 @@ export class SereneSession {
             }
             case "backing":
                 this._updateSettings({
-                    backing: sanitizeBacking(
-                        message.value,
-                        this._settings.scale,
-                        this._settings.backing
-                    ),
+                    backing: sanitizeBacking(message.value, this._settings.backing),
                 });
                 if (!this._rect) return;
                 this._rebuild();
@@ -294,11 +318,13 @@ export class SereneSession {
     private _rebuild(): void {
         if (!this._rect) return;
         this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
-            pxPerSecond: this._settings.speed,
+            pxPerSecond: speedToPxPerSecond(this._settings.speed),
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
-            backing: this._settings.backing.enabled ? this._settings.backing : null,
+            backing: this._settings.backing.enabled
+                ? { progression: this._settings.backing.progression, voicing: "full", rhythm: 1 }
+                : null,
         });
     }
 
@@ -307,7 +333,7 @@ export class SereneSession {
         if (autoplay) this._pendingAutoplay = true;
         postToPanel(this._ctx, {
             type: "score",
-            score: serializeScore(this._score, this._elementCount),
+            score: serializeScore(this._score, this._elementCount, this._frameIds),
             autoplay,
             live,
         });

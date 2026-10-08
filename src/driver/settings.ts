@@ -5,30 +5,30 @@ import {
     getScale,
     normalizeRange,
 } from "../score/pitch";
-import {
-    ARP_PATTERNS,
-    BackingOptions,
-    Rhythm,
-    Voicing,
-    progressionsFor,
-} from "../score/chords";
-import { DEFAULT_SCORE_OPTIONS, clampSpeed } from "../score/score";
+import { PROGRESSIONS } from "../score/chords";
+import { BASE_PX_PER_SECOND } from "../score/score";
 import { Ctx, stamp } from "./context";
 
 const SETTINGS_KEY = "settings";
 
+export const MIN_SPEED = 0.5;
+export const MAX_SPEED = 2;
+const SPEED_STEP = 0.05;
+
 export type KnobSettings = {
     attack: number;
-    notes: number;
-    backingLevel: number;
+    volume: number;
     reverb: number;
 };
 
-export type BackingSettings = BackingOptions & {
+/** `progression` indexes PROGRESSIONS (Pop, Classic, Simple, Drone). */
+export type BackingSettings = {
     enabled: boolean;
+    progression: number;
 };
 
 export type SereneSettings = KnobSettings & {
+    /** Multiplier on BASE_PX_PER_SECOND. */
     speed: number;
     scale: ScaleId;
     loop: boolean;
@@ -40,56 +40,54 @@ export type SereneSettings = KnobSettings & {
 export const DEFAULT_BACKING: BackingSettings = {
     enabled: false,
     progression: 0,
-    voicing: "full",
-    rhythm: 1,
 };
 
 export const DEFAULT_SETTINGS: SereneSettings = {
-    speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
+    speed: 1,
     scale: DEFAULT_SCALE_ID,
     loop: false,
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
-    notes: 0.8,
-    backingLevel: 0.7,
-    reverb: 0.38,
+    volume: 0.7,
+    reverb: 0.3,
     backing: DEFAULT_BACKING,
 };
 
-const VOICINGS: Voicing[] = ["bass", "omit3", "full"];
-const RHYTHMS: Rhythm[] = [1, 2, 4, ...ARP_PATTERNS];
+export function speedToPxPerSecond(speed: number): number {
+    return BASE_PX_PER_SECOND * speed;
+}
+
+export function clampSpeed(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        return DEFAULT_SETTINGS.speed;
+    }
+    // Before 1.5 speed was stored in px per second (40 to 900).
+    const multiplier = value > MAX_SPEED * 4 ? value / BASE_PX_PER_SECOND : value;
+    const clamped = Math.min(MAX_SPEED, Math.max(MIN_SPEED, multiplier));
+    return Number((Math.round(clamped / SPEED_STEP) * SPEED_STEP).toFixed(2));
+}
 
 export function sanitizeBacking(
     raw: unknown,
-    scale: ScaleId,
     current: BackingSettings = DEFAULT_BACKING
 ): BackingSettings {
     if (typeof raw !== "object" || raw === null) return current;
     const record = raw as Record<string, unknown>;
-    const count = progressionsFor(scale).length;
+    const last = PROGRESSIONS.length - 1;
     const progression =
         typeof record.progression === "number" && Number.isFinite(record.progression)
-            ? Math.min(count - 1, Math.max(0, Math.floor(record.progression)))
-            : Math.min(count - 1, current.progression);
-    const voicing = VOICINGS.includes(record.voicing as Voicing)
-        ? (record.voicing as Voicing)
-        : current.voicing;
-    const rhythm = RHYTHMS.includes(record.rhythm as Rhythm)
-        ? (record.rhythm as Rhythm)
-        : current.rhythm;
+            ? Math.min(last, Math.max(0, Math.floor(record.progression)))
+            : Math.min(last, current.progression);
     return {
         enabled: typeof record.enabled === "boolean" ? record.enabled : current.enabled,
         progression,
-        voicing,
-        rhythm,
     };
 }
 
 const KNOB_RANGES: Record<keyof KnobSettings, [number, number]> = {
-    attack: [0, 0.3],
-    notes: [0, 1],
-    backingLevel: [0, 1],
+    attack: [0, 1],
+    volume: [0, 1],
     reverb: [0, 1],
 };
 
@@ -112,17 +110,13 @@ export function sanitizeKnobs(
 
 export function sanitizeSettings(raw: Record<string, unknown>): SereneSettings {
     const scale = typeof raw.scale === "string" ? getScale(raw.scale).id : DEFAULT_SETTINGS.scale;
-    const speed =
-        typeof raw.speed === "number" && Number.isFinite(raw.speed)
-            ? clampSpeed(raw.speed)
-            : DEFAULT_SETTINGS.speed;
     return {
         ...sanitizeKnobs(raw, DEFAULT_SETTINGS),
-        speed,
+        speed: clampSpeed(raw.speed),
         scale,
         loop: raw.loop === true,
         ...normalizeRange(raw.lowOctave, raw.highOctave),
-        backing: sanitizeBacking(raw.backing, scale),
+        backing: sanitizeBacking(raw.backing),
     };
 }
 

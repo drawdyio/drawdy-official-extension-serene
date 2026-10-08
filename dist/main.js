@@ -14,19 +14,58 @@ function unwrap(response) {
 const SCALES = [
     {
         id: "major-pentatonic",
-        name: "C major pentatonic",
+        name: "Major pentatonic",
+        description: "Bright",
         steps: [0, 2, 4, 7, 9],
     },
-    { id: "major", name: "C major", steps: [0, 2, 4, 5, 7, 9, 11] },
-    { id: "dorian", name: "C dorian", steps: [0, 2, 3, 5, 7, 9, 10] },
-    { id: "lydian", name: "C lydian", steps: [0, 2, 4, 6, 7, 9, 11] },
-    { id: "mixolydian", name: "C mixolydian", steps: [0, 2, 4, 5, 7, 9, 10] },
-    { id: "japanese", name: "Japanese hirajoshi", steps: [0, 2, 3, 7, 8] },
+    {
+        id: "major",
+        name: "Major",
+        description: "Happy and familiar",
+        steps: [0, 2, 4, 5, 7, 9, 11],
+    },
+    {
+        id: "dorian",
+        name: "Dorian",
+        description: "Cool and a little jazzy",
+        steps: [0, 2, 3, 5, 7, 9, 10],
+    },
+    {
+        id: "lydian",
+        name: "Lydian",
+        description: "Dreamy and floating",
+        steps: [0, 2, 4, 6, 7, 9, 11],
+    },
+    {
+        id: "mixolydian",
+        name: "Mixolydian",
+        description: "Bluesy and relaxed",
+        steps: [0, 2, 4, 5, 7, 9, 10],
+    },
+    {
+        id: "minor-pentatonic",
+        name: "Minor pentatonic",
+        description: "Moody",
+        steps: [0, 3, 5, 7, 10],
+    },
+    {
+        id: "phrygian",
+        name: "Phrygian",
+        description: "Dark and mysterious",
+        steps: [0, 1, 3, 5, 7, 8, 10],
+    },
+    {
+        // Kept as "japanese" so settings saved before the rename still load.
+        id: "japanese",
+        name: "Hirajoshi",
+        description: "Calm and Japanese-inspired",
+        steps: [0, 2, 3, 7, 8],
+    },
 ];
 const DEFAULT_SCALE_ID = "major-pentatonic";
 const MIN_OCTAVE = 1;
 const MAX_OCTAVE = 8;
-const DEFAULT_RANGE = { lowOctave: 4, highOctave: 7 };
+const DEFAULT_RANGE = { lowOctave: 3, highOctave: 6 };
 function normalizeRange(lowOctave, highOctave, fallback = DEFAULT_RANGE) {
     const clampOctave = (value, alt) => typeof value === "number" && Number.isFinite(value)
         ? Math.min(MAX_OCTAVE, Math.max(MIN_OCTAVE, Math.round(value)))
@@ -74,7 +113,6 @@ function yToRow(scale, range, y, top, height) {
     return Math.max(0, Math.min(rows - 1, Math.floor(fromBottom * rows)));
 }
 
-const ARP_PATTERNS = ["arp-up", "arp-down"];
 function isArp(rhythm) {
     return typeof rhythm === "string";
 }
@@ -120,45 +158,38 @@ function chord(symbol) {
     const degree = ROMAN[numeral.toLowerCase()];
     return { degree, inversion: suffix === "6" ? 1 : 0 };
 }
-function progression(symbols) {
+function progression(label, symbols) {
     return {
         name: symbols,
+        label,
         chords: symbols.split(" ").map(chord),
     };
 }
-const MAJOR_PROGRESSIONS = [
-    progression("I vi IV V"),
-    progression("I iii IV V"),
-    progression("I V"),
-    progression("I IV"),
-    progression("I"),
+/**
+ * The same four backings in every scale. Chord qualities follow the mode
+ * because the triads are built diatonically from the harmony scale.
+ */
+const PROGRESSIONS = [
+    progression("Pop", "I vi IV V"),
+    progression("Classic", "I iii IV V"),
+    progression("Simple", "I V"),
+    progression("Drone", "I"),
 ];
-const PROGRESSIONS = {
-    major: MAJOR_PROGRESSIONS,
-    dorian: [
-        progression("i III IV"),
-        progression("i IV"),
-        progression("i III/6 IV/6"),
-    ],
-    mixolydian: [progression("I v"), progression("I vii")],
-    lydian: [
-        progression("I II V"),
-        progression("I II I II"),
-        progression("I II"),
-        progression("I V"),
-        progression("I"),
-    ],
-    "major-pentatonic": MAJOR_PROGRESSIONS,
-    japanese: [progression("I")],
-};
+const AEOLIAN_STEPS = [0, 2, 3, 5, 7, 8, 10];
+/** Five-note scales borrow the seven-note scale that contains them. */
 function harmonyScale(scale) {
-    return scale.id === "major-pentatonic" ? getScale("major") : scale;
+    if (scale.id === "major-pentatonic")
+        return getScale("major");
+    if (scale.id === "minor-pentatonic" || scale.id === "japanese") {
+        return { ...scale, steps: AEOLIAN_STEPS };
+    }
+    return scale;
 }
-function progressionsFor(scaleId) {
-    return PROGRESSIONS[scaleId];
+function progressionsFor(_scaleId) {
+    return PROGRESSIONS;
 }
 function pickProgression(scaleId, index) {
-    const list = progressionsFor(scaleId);
+    const list = progressionsFor();
     const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
     return list[clamped];
 }
@@ -333,655 +364,619 @@ const PANEL_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400;500&display=swap" />
 <style id="theme">:root{/*__DRAWDY_STYLING__*/}</style>
 <style>
+/* Figma tokens mapped onto the host's styling variables. Tokens the host
+   does not pass through are restated here per theme. */
+:root {
+    --fg: var(--drawdy-foreground, rgb(0 0 0 / 0.95));
+    --fg-2: var(--drawdy-muted-foreground, rgb(0 0 0 / 0.7));
+    --fg-3: rgb(0 0 0 / 0.5);
+    --fg-disabled: rgb(0 0 0 / 0.3);
+    --surface: var(--drawdy-background, #fff);
+    --border: var(--drawdy-border, rgb(0 0 0 / 0.1));
+    --divider: rgb(0 0 0 / 0.06);
+    --hover: rgb(0 0 0 / 0.04);
+    --pressed: rgb(0 0 0 / 0.06);
+    --track: rgb(0 0 0 / 0.04);
+    --layer: rgb(0 0 0 / 0.11);
+    --row-selected: rgb(0 0 0 / 0.04);
+    --mark: rgb(0 0 0 / 0.1);
+    --accent: var(--drawdy-primary, #c5f601);
+    --accent-fg: var(--drawdy-accent, #7fae00);
+    --accent-subtle: rgb(179 224 0 / 0.3);
+    --on-accent: var(--drawdy-primary-foreground, #0a0a0a);
+    --ring: var(--drawdy-ring, #b3e000);
+    --key-white: var(--surface);
+    --key-black: #71717a;
+    --tooltip-bg: #52525b;
+    --tooltip-fg: #fff;
+    --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.1);
+    --grip-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-theme="dark"] {
+    --fg-3: rgb(255 255 255 / 0.5);
+    --fg-disabled: rgb(255 255 255 / 0.3);
+    --divider: rgb(255 255 255 / 0.06);
+    --hover: rgb(255 255 255 / 0.08);
+    --pressed: rgb(255 255 255 / 0.02);
+    --track: rgb(255 255 255 / 0.04);
+    --layer: rgb(255 255 255 / 0.1);
+    --row-selected: rgb(255 255 255 / 0.04);
+    --mark: rgb(255 255 255 / 0.1);
+    --accent-subtle: rgb(179 224 0 / 0.1);
+    --key-black: rgb(255 255 255 / 0.81);
+    --tooltip-bg: #3f3f46;
+    --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.4);
+}
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 13px;
-    line-height: 1.45;
-    color: var(--drawdy-foreground, #111);
-    background: var(--drawdy-background, #fff);
-    background-image: radial-gradient(
-        130% 70% at 50% -10%,
-        color-mix(in oklab, var(--drawdy-primary, #6366f1) 16%, transparent),
-        transparent 62%
-    );
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
+    font-family: "Google Sans Flex", "Google Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--fg);
+    background: var(--surface);
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
 }
+button { font: inherit; color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 main {
-    flex: 1;
-    min-height: 0;
+    height: 100%;
     overflow-y: auto;
-    padding: 18px 18px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
+    padding: 16px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--mark) transparent;
 }
-header {
+.view { display: flex; flex-direction: column; gap: 12px; }
+.label { color: var(--fg-2); }
+.field { display: flex; flex-direction: column; gap: 8px; position: relative; }
+.field-head { display: flex; align-items: center; justify-content: space-between; }
+.field-value { color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.divider { border: 0; height: 1px; margin: 0; background: var(--divider); }
+.chevron {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 120ms var(--ease);
+}
+
+/* Scale select */
+.select-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    height: 36px;
+    padding: 0 10px 0 12px;
+    color: var(--fg-2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
+}
+.select-trigger:hover { background: linear-gradient(var(--hover), var(--hover)), var(--surface); }
+.select-trigger:active { background: linear-gradient(var(--pressed), var(--pressed)), var(--surface); }
+.select-trigger[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.select-list {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--pop-shadow);
+    animation: drop 120ms var(--ease);
+}
+@keyframes drop {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+}
+.option {
     display: flex;
     align-items: center;
     gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
 }
-.mark {
-    width: 26px;
-    height: 15px;
+.option.active { background: var(--hover); }
+.option:active { background: var(--pressed); }
+.option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.option-desc { color: var(--fg-3); font-size: 11px; line-height: 14px; }
+.check {
+    width: 16px;
+    height: 16px;
     fill: none;
-    stroke: var(--drawdy-primary, #6366f1);
-    stroke-width: 1.6;
+    stroke: var(--fg);
+    stroke-width: 1.5;
     stroke-linecap: round;
-    opacity: 0.9;
+    stroke-linejoin: round;
+    visibility: hidden;
 }
-.brand {
-    flex: 1;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-}
-.chip {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    padding: 3px 8px;
-    border-radius: 999px;
-    color: var(--drawdy-muted-foreground, #888);
-    border: 1px solid var(--drawdy-border, #e5e5e5);
-}
-.hero {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    padding: 6px 0 2px;
-}
-.dial {
+.option[aria-selected="true"] .check { visibility: visible; }
+
+/* Range piano */
+.piano {
     position: relative;
-    width: 132px;
-    height: 132px;
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--key-white);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: pointer;
 }
-.dial::before {
+.keys { position: absolute; inset: 0; }
+.key { position: absolute; top: 0; }
+.key.white {
+    bottom: 0;
+    background: var(--key-white);
+    box-shadow: inset -1px 0 0 var(--divider);
+}
+.key.white:last-child { box-shadow: none; }
+.key.black {
+    z-index: 1;
+    height: 60%;
+    width: calc(100% / 50 * 0.64);
+    transform: translateX(-50%);
+    background: var(--key-black);
+    border-radius: 0 0 1.5px 1.5px;
+    transition: box-shadow 120ms var(--ease);
+}
+.key.black.in-range { box-shadow: inset 0 -2px 0 var(--accent); }
+.band {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    background: var(--accent-subtle);
+    pointer-events: none;
+}
+.handle {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    bottom: 0;
+    width: 16px;
+    margin-left: -8px;
+    cursor: ew-resize;
+    border-radius: 6px;
+}
+.handle::before {
     content: "";
     position: absolute;
-    inset: 14px;
-    border-radius: 999px;
-    background: var(--drawdy-primary, #6366f1);
-    opacity: 0;
-    transition: opacity 0.4s ease;
+    top: 0;
+    bottom: 0;
+    left: 7px;
+    width: 2px;
+    background: var(--accent);
 }
-body.playing .dial::before {
-    opacity: 0.14;
-    animation: breathe 3s ease-in-out infinite;
+.grip {
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 12px;
+    height: 20px;
+    margin-top: -8px;
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--border), var(--grip-shadow);
+    transition: transform 120ms var(--ease);
 }
-@keyframes breathe {
-    0%, 100% { transform: scale(0.94); opacity: 0.08; }
-    50% { transform: scale(1.05); opacity: 0.18; }
-}
-.ring {
+.grip::after {
+    content: "";
     position: absolute;
     inset: 0;
-    width: 132px;
-    height: 132px;
-    transform: rotate(-90deg);
+    border-radius: inherit;
+    transition: background 120ms var(--ease);
 }
-.ring circle {
-    fill: none;
-    stroke-width: 5;
-    stroke-linecap: round;
-}
-.ring-track {
-    stroke: var(--drawdy-border, #e5e5e5);
-}
-.ring-fill {
-    stroke: var(--drawdy-primary, #6366f1);
-    stroke-dasharray: 339.292;
-    stroke-dashoffset: 339.292;
-    transition: stroke-dashoffset 0.09s linear;
-}
-#play {
+.handle:hover .grip, .handle.dragging .grip { transform: scale(1.15); }
+.handle:hover .grip::after { background: var(--hover); }
+.handle.dragging .grip::after { background: var(--pressed); }
+.handle:focus-visible { outline: none; }
+.handle:focus-visible .grip { outline: 2px solid var(--ring); outline-offset: 1px; }
+.piano-labels { position: relative; height: 16px; margin-top: 6px; color: var(--fg-3); }
+.key-label {
     position: absolute;
-    inset: 29px;
-    display: grid;
-    place-items: center;
-    padding: 0;
-    border: none;
-    border-radius: 999px;
-    cursor: pointer;
-    color: var(--drawdy-primary-foreground, #fff);
-    background: var(--drawdy-primary, #6366f1);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
-    transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+    top: 0;
+    transform: translateX(-50%);
+    transition: color 120ms var(--ease);
 }
-#play svg { width: 26px; height: 26px; fill: currentColor; }
-#play:hover:not(:disabled) { transform: scale(1.05); }
-#play:active:not(:disabled) { transform: scale(0.97); }
-#play:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 3px; }
-#play:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
-#play.pulse { animation: pulse 1.5s ease-in-out infinite; }
-@keyframes pulse {
-    0%, 100% {
-        transform: scale(1);
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 0 color-mix(in oklab, var(--drawdy-primary, #6366f1) 60%, transparent);
-    }
-    50% {
-        transform: scale(1.07);
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18), 0 0 0 16px color-mix(in oklab, var(--drawdy-primary, #6366f1) 0%, transparent);
-    }
-}
-.meter {
+.key-label.first { transform: none; }
+.key-label.last { left: auto !important; right: 0; transform: none; }
+.key-label.end { color: var(--accent-fg); }
+
+/* Backing segmented control */
+.segmented {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    height: 28px;
+    padding: 2px;
+    gap: 2px;
+    background: var(--track);
+    border-radius: 8px;
 }
-.loop {
-    font: inherit;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 3px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--drawdy-border, #e5e5e5);
-    background: transparent;
-    color: var(--drawdy-muted-foreground, #888);
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-.loop:hover { border-color: var(--drawdy-primary, #6366f1); }
-.loop:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
-.loop[aria-pressed="true"] {
-    color: var(--drawdy-primary, #6366f1);
-    border-color: var(--drawdy-primary, #6366f1);
-    background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 12%, transparent);
-}
-.time {
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-    letter-spacing: 0.03em;
-    color: var(--drawdy-muted-foreground, #888);
-}
-.time b { color: var(--drawdy-foreground, #111); font-weight: 600; }
-.card {
-    border: 1px solid var(--drawdy-border, #e5e5e5);
-    border-radius: var(--drawdy-radius-lg, 14px);
-    background: var(--drawdy-surface, #fafafa);
-    padding: 4px 12px;
-}
-.row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 40px;
-}
-.row + .row { border-top: 1px solid var(--drawdy-border, #e5e5e5); }
-.row label {
-    width: 54px;
-    flex: none;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--drawdy-muted-foreground, #888);
-}
-.row .val {
-    width: 50px;
-    flex: none;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-    color: var(--drawdy-muted-foreground, #888);
-}
-select {
+.segment {
     flex: 1;
     min-width: 0;
-    height: 30px;
-    padding: 0 26px 0 9px;
-    font: inherit;
-    font-size: 12px;
-    color: var(--drawdy-foreground, #111);
-    background-color: var(--drawdy-background, #fff);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 12px;
-    border: 1px solid var(--drawdy-border, #e5e5e5);
-    border-radius: var(--drawdy-radius-md, 9px);
-    appearance: none;
-    outline: none;
+    padding: 0 4px;
+    color: var(--fg-3);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
     cursor: pointer;
-    transition: border-color 0.15s ease;
+    transition: background 120ms var(--ease), color 120ms var(--ease);
 }
-select:hover { border-color: var(--drawdy-primary, #6366f1); }
-select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
-.rack {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    padding: 14px 4px 12px;
-}
-.rack.five { grid-template-columns: repeat(5, 1fr); }
-.knob[hidden] { display: none; }
-.knob {
+.segment:hover { color: var(--fg); background: var(--hover); }
+.segment:active { background: var(--pressed); }
+.segment[aria-checked="true"] { color: var(--fg); background: var(--layer); font-weight: 500; }
+.segment[aria-checked="true"]:hover { background: linear-gradient(var(--hover), var(--hover)), var(--layer); }
+.segment:disabled { color: var(--fg-disabled); cursor: default; background: transparent; }
+.segment[aria-checked="true"]:disabled { background: var(--layer); }
+
+/* Collapsible sections */
+.section-head {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 5px;
-    padding: 2px 0;
-    border-radius: var(--drawdy-radius-md, 9px);
-    cursor: ns-resize;
-    outline: none;
+    gap: 8px;
+    width: 100%;
+    min-height: 24px;
+    padding: 0;
+    color: var(--fg-2);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    text-align: left;
+}
+button.section-head { cursor: pointer; }
+.section-title { flex: 1; }
+.feel-summary { color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.feel.open .feel-summary { display: none; }
+.feel:not(.open) .section-head .chevron { transform: rotate(-90deg); }
+.feel .section-head .chevron { transition-duration: 180ms; }
+.feel-body {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 180ms var(--ease);
+}
+.feel.open .feel-body { grid-template-rows: 1fr; }
+.feel-inner { min-height: 0; overflow: hidden; }
+.sliders { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+
+/* Feel sliders: label inside on the left, value on the right */
+.slider {
+    position: relative;
+    height: 28px;
+    border-radius: 8px;
+    background: var(--track);
+    cursor: ew-resize;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
 }
-.knob:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
-.knob svg { width: 50px; height: 50px; display: block; }
-.k-track {
-    fill: none;
-    stroke: var(--drawdy-border, #e5e5e5);
-    stroke-width: 4;
-    stroke-linecap: round;
+.slider::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: background 120ms var(--ease);
 }
-.k-fill {
-    fill: none;
-    stroke: var(--drawdy-primary, #6366f1);
-    stroke-width: 4;
-    stroke-linecap: round;
-    stroke-dasharray: 84.823;
-    stroke-dashoffset: 84.823;
+.slider:hover::after { background: var(--hover); }
+.slider:focus-visible { outline-offset: 1px; }
+.s-fill {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 2px;
+    border-radius: 6px;
+    background: var(--layer);
 }
-.k-cap {
-    fill: var(--drawdy-background, #fff);
-    stroke: var(--drawdy-border, #e5e5e5);
-    stroke-width: 1;
-    transition: stroke 0.15s ease;
+.slider.active .s-fill { background: linear-gradient(var(--pressed), var(--pressed)), var(--layer); }
+.s-marks { position: absolute; inset: 0; pointer-events: none; }
+.s-tick, .s-dot { position: absolute; top: 50%; background: var(--mark); }
+.s-tick { width: 1px; height: 8px; margin: -4px 0 0 -0.5px; }
+.s-dot { width: 2px; height: 2px; margin: -1px 0 0 -1px; border-radius: 1px; }
+.s-label {
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    font-weight: 500;
+    pointer-events: none;
 }
-.k-tick {
-    stroke: var(--drawdy-foreground, #111);
-    stroke-width: 2.4;
-    stroke-linecap: round;
-}
-.knob:hover .k-cap, .knob.live .k-cap { stroke: var(--drawdy-primary, #6366f1); }
-.knob.live .k-tick { stroke: var(--drawdy-primary, #6366f1); }
-.k-label {
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--drawdy-muted-foreground, #888);
-}
-.k-value {
-    font-size: 11px;
+.s-value {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    text-align: right;
+    color: var(--fg-3);
     font-variant-numeric: tabular-nums;
-    color: var(--drawdy-foreground, #111);
+    pointer-events: none;
+    white-space: nowrap;
+    transition: color 120ms ease;
 }
-.add-frame {
-    flex: 1;
-    height: 50px;
-    padding: 0 12px;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--drawdy-primary, #6366f1);
+.slider.active .s-value { color: var(--fg); }
+.s-indicator {
+    position: absolute;
+    top: 8px;
+    left: 0;
+    width: 2px;
+    height: 12px;
+    border-radius: 1px;
+    background: var(--fg-3);
+    pointer-events: none;
+    transition: background-color 120ms ease, width 120ms ease, margin 120ms ease;
+}
+.slider.active .s-indicator { background-color: var(--fg); width: 3px; margin-left: -0.5px; }
+.slider.disabled { cursor: default; }
+.slider.disabled .s-label, .slider.disabled .s-value { color: var(--fg-disabled); }
+.slider.disabled .s-indicator { background: var(--fg-disabled); }
+.measure { position: absolute; visibility: hidden; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Frames */
+.frames { display: flex; flex-direction: column; gap: 8px; }
+.text-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    margin-right: -6px;
+    padding: 0 6px;
+    color: var(--fg-2);
     background: transparent;
-    border: 1px dashed var(--drawdy-primary, #6366f1);
-    border-radius: var(--drawdy-radius-md, 9px);
+    border: 0;
+    border-radius: 6px;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background 120ms var(--ease), color 120ms var(--ease);
 }
-.add-frame:hover:not(:disabled) { background: color-mix(in oklab, var(--drawdy-primary, #6366f1) 10%, transparent); }
-.add-frame:focus-visible { outline: 2px solid var(--drawdy-ring, #94ba00); outline-offset: 2px; }
-.add-frame:disabled { opacity: 0.5; cursor: default; }
-.card.backing-off .backing-only { display: none; }
-.card.arp-mode .voicing-row { display: none; }
-.status {
-    font-size: 11px;
-    line-height: 1.6;
+.text-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+.text-action:hover { color: var(--fg); background: var(--hover); }
+.text-action:active { background: var(--pressed); }
+.text-action:disabled { color: var(--fg-disabled); background: transparent; cursor: default; }
+.frame-list { list-style: none; margin: 0 -4px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.frame-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
+}
+.frame-row.selected { background: var(--row-selected); }
+.frame-row:hover { background: var(--hover); }
+.frame-row.selected:hover { background: linear-gradient(var(--hover), var(--hover)), var(--row-selected); }
+.frame-row:active { background: var(--pressed); }
+.thumb {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 54px;
+    height: 36px;
+    padding: 3px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.thumb svg { width: 100%; height: 100%; display: block; }
+.thumb path {
+    fill: none;
+    stroke: var(--fg);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+.frame-text { flex: 1; min-width: 0; }
+.frame-name { display: flex; align-items: center; gap: 6px; }
+.name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame-dur { color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.eq { display: none; align-items: flex-end; gap: 1.5px; height: 10px; }
+.frame-row.playing .eq { display: inline-flex; }
+.eq i { width: 2px; height: 100%; border-radius: 1px; background: var(--fg-2); transform-origin: bottom; animation: eq 700ms ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: -240ms; }
+.eq i:nth-child(3) { animation-delay: -470ms; }
+@keyframes eq {
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
+}
+.icon-btn {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: var(--fg-2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+.icon-btn svg { width: 12px; height: 12px; fill: currentColor; }
+.icon-btn:hover { color: var(--fg); background: linear-gradient(var(--hover), var(--hover)), var(--surface); }
+.icon-btn:active { background: linear-gradient(var(--pressed), var(--pressed)), var(--surface); }
+.icon-btn[aria-pressed="true"] { color: var(--fg); background: var(--layer); }
+.icon-btn[aria-pressed="true"]:hover { background: linear-gradient(var(--hover), var(--hover)), var(--layer); }
+.icon-btn:disabled { color: var(--fg-disabled); cursor: default; background: var(--surface); }
+.icon-btn.attention { animation: attention 1.4s ease-in-out infinite; }
+@keyframes attention {
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
+    50% { box-shadow: 0 0 0 5px var(--accent-subtle); }
+}
+.footer { margin: 4px 0 0; color: var(--fg-3); }
+
+/* First use */
+.first-use {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px 16px 40px;
     text-align: center;
-    text-wrap: balance;
-    color: var(--drawdy-muted-foreground, #888);
+    animation: fade 180ms var(--ease);
 }
-.status.hint { color: var(--drawdy-warning, #d97706); }
-.status b { color: var(--drawdy-foreground, #111); font-weight: 600; }
+.logo-tile { width: 48px; height: 48px; border-radius: 12px; margin-bottom: 8px; }
+.first-use h1 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 500; }
+.first-use p { margin: 0 0 8px; color: var(--fg-2); }
+.primary {
+    height: 32px;
+    padding: 0 14px;
+    font-weight: 500;
+    color: var(--on-accent);
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
+}
+.primary:hover { background: linear-gradient(rgb(0 0 0 / 0.06), rgb(0 0 0 / 0.06)), var(--accent); }
+.primary:active { background: linear-gradient(rgb(0 0 0 / 0.1), rgb(0 0 0 / 0.1)), var(--accent); }
+.primary:disabled { opacity: 0.5; cursor: default; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.tooltip {
+    position: fixed;
+    z-index: 10;
+    max-width: 220px;
+    padding: 4px 8px;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--tooltip-fg);
+    background: var(--tooltip-bg);
+    border-radius: 6px;
+    pointer-events: none;
+    animation: fade 120ms var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
 <main>
-    <header>
-        <svg class="mark" viewBox="0 0 28 16" aria-hidden="true"><path d="M1 8c3.2-7.5 6.4-7.5 9.6 0s6.4 7.5 9.6 0 4.6-3.4 6.8 0"/></svg>
-        <div class="brand">Serene</div>
-        <div class="chip" id="range-chip">C4&ndash;C7</div>
-    </header>
+<div class="view" id="full" hidden>
+    <div class="field" id="scale-field">
+        <span class="label" id="scale-label">Scale</span>
+        <button type="button" class="select-trigger" id="scale-trigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="scale-label scale-value">
+            <span id="scale-value"></span>
+            <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+        </button>
+        <div class="select-list" id="scale-list" role="listbox" aria-labelledby="scale-label" tabindex="-1" hidden></div>
+    </div>
 
-    <div class="hero">
-        <div class="dial">
-            <svg class="ring" viewBox="0 0 132 132" aria-hidden="true">
-                <circle class="ring-track" cx="66" cy="66" r="54"></circle>
-                <circle class="ring-fill" id="ring" cx="66" cy="66" r="54"></circle>
-            </svg>
-            <button id="play" type="button" disabled aria-label="Play">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-icon" d="M9 5.5v13l10-6.5z"/></svg>
-            </button>
+    <div class="field">
+        <div class="field-head">
+            <span class="label" id="range-label">Range</span>
+            <span class="field-value" id="range-value"></span>
         </div>
-        <div class="meter">
-            <div class="time" id="time"><b>0.0</b> / 0.0s</div>
-            <button id="loop" type="button" class="loop" aria-pressed="false" aria-label="Loop">&#8635; Loop</button>
+        <div>
+            <div class="piano" id="piano">
+                <div class="keys" id="keys"></div>
+                <div class="band" id="band"></div>
+                <div class="handle" id="handle-low" role="slider" tabindex="0" aria-label="Lowest note"><span class="grip"></span></div>
+                <div class="handle" id="handle-high" role="slider" tabindex="0" aria-label="Highest note"><span class="grip"></span></div>
+            </div>
+            <div class="piano-labels" id="piano-labels" aria-hidden="true"></div>
         </div>
     </div>
 
-    <section class="card">
-        <div class="row">
-            <label for="scale">Scale</label>
-            <select id="scale"></select>
-        </div>
-        <div class="row">
-            <label for="low">Range</label>
-            <select id="low" aria-label="Lowest octave"></select>
-            <span class="val" style="width:auto">to</span>
-            <select id="high" aria-label="Highest octave"></select>
+    <div class="field">
+        <span class="label" id="backing-label">Backing</span>
+        <div class="segmented" id="backing" role="radiogroup" aria-labelledby="backing-label"></div>
+    </div>
+
+    <hr class="divider" />
+
+    <section class="feel" id="feel">
+        <button type="button" class="section-head" id="feel-toggle" aria-expanded="false" aria-controls="feel-body">
+            <span class="section-title">Feel</span>
+            <span class="feel-summary" id="feel-summary"></span>
+            <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+        </button>
+        <div class="feel-body" id="feel-body">
+            <div class="feel-inner"><div class="sliders" id="sliders"></div></div>
         </div>
     </section>
 
-    <section class="card rack" id="rack"></section>
+    <hr class="divider" />
 
-    <section class="card">
-        <div class="row">
-            <label for="backing-prog">Backing</label>
-            <select id="backing-prog" aria-label="Chord progression"></select>
+    <section class="frames">
+        <div class="section-head">
+            <span class="section-title">Frames</span>
+            <button type="button" class="text-action" id="new-frame">
+                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg>New frame
+            </button>
         </div>
-        <div class="row backing-only voicing-row">
-            <label for="backing-voicing">Voicing</label>
-            <select id="backing-voicing">
-                <option value="bass">Bass only</option>
-                <option value="omit3">Omit 3rd</option>
-                <option value="full">Full chord</option>
-            </select>
-        </div>
-        <div class="row backing-only">
-            <label for="backing-rhythm">Rhythm</label>
-            <select id="backing-rhythm">
-                <option value="1">1 per chord</option>
-                <option value="2">2 per chord</option>
-                <option value="4">4 per chord</option>
-                <option value="arp-up">Arpeggio up</option>
-                <option value="arp-down">Arpeggio down</option>
-            </select>
-        </div>
+        <ul class="frame-list" id="frame-list"></ul>
     </section>
 
-    <section class="card">
-        <div class="row">
-            <label for="add-frame">Frames</label>
-            <button id="add-frame" type="button" class="add-frame">Add a Serene frame</button>
-            <span class="val" id="frame-count">0</span>
-        </div>
-    </section>
+    <p class="footer">Changes apply to all Serene frames.</p>
+</div>
 
-    <div class="status" id="status">Select a <b>Serene frame</b> and press the play button that appears above it.</div>
+<div class="first-use" id="first-use" hidden>
+    <img class="logo-tile" src="__SERENE_ICON__" alt="" />
+    <h1>Turn drawings into music</h1>
+    <p>Draw inside a Serene frame and press play.</p>
+    <button type="button" class="primary" id="create-frame">Create Serene frame</button>
+</div>
 </main>
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
 <script>
 (function () {
     var api = acquireDrawdyApi();
+    var root = document.documentElement;
     var themeStyle = document.getElementById("theme");
-    var playBtn = document.getElementById("play");
-    var playIcon = document.getElementById("play-icon");
-    var ring = document.getElementById("ring");
-    var timeEl = document.getElementById("time");
-    var loopBtn = document.getElementById("loop");
-    var statusEl = document.getElementById("status");
-    var scaleSelect = document.getElementById("scale");
-    var lowSelect = document.getElementById("low");
-    var highSelect = document.getElementById("high");
-    var rangeChip = document.getElementById("range-chip");
+
+    var BASE_PX_PER_SECOND = 200;
     var MIN_OCTAVE = 1;
     var MAX_OCTAVE = 8;
+    var WHITE_KEYS = 50;
+    var NOTES_LEVEL = 0.8;
+    var BACKING_LEVEL = 0.7;
+    var THUMB_WIDTH = 160;
+    var PLAY_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6L9.8 6z"/></svg>';
+    var PAUSE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 2.5h2v7H3zM7 2.5h2v7H7z"/></svg>';
 
-    function fillOctaves(select, from, to) {
-        select.textContent = "";
-        for (var octave = from; octave <= to; octave++) {
-            var option = document.createElement("option");
-            option.value = String(octave);
-            option.textContent = "C" + octave;
-            select.appendChild(option);
-        }
+    var settings = {
+        speed: 1,
+        attack: 0.02,
+        volume: 0.7,
+        reverb: 0.3,
+        scale: "major-pentatonic",
+        lowOctave: 3,
+        highOctave: 6,
+        loop: false,
+        backing: { enabled: false, progression: 0 },
+    };
+    var attentionId = null;
+
+    function applyTheme(css) {
+        root.setAttribute("data-theme", css.indexOf("color-scheme: dark") >= 0 ? "dark" : "light");
     }
-    fillOctaves(lowSelect, MIN_OCTAVE, MAX_OCTAVE - 1);
-    fillOctaves(highSelect, MIN_OCTAVE + 1, MAX_OCTAVE);
-
-    function showRange(low, high) {
-        lowSelect.value = String(low);
-        highSelect.value = String(high);
-        rangeChip.textContent = "C" + low + "\u2013C" + high;
-    }
-    var rack = document.getElementById("rack");
-    var backingProg = document.getElementById("backing-prog");
-    var backingVoicing = document.getElementById("backing-voicing");
-    var backingRhythm = document.getElementById("backing-rhythm");
-    var backingCard = backingProg.closest(".card");
-    var backing = { enabled: false, progression: 0, voicing: "full", rhythm: 1 };
-    var addFrameBtn = document.getElementById("add-frame");
-    var frameCountEl = document.getElementById("frame-count");
-
-    var ARC_LENGTH = 84.823;
-    var ARC_PATH = "M11.27 36.73A18 18 0 1 1 36.73 36.73";
-    var DRAG_PX = 170;
-    var FINE = 4;
-    var WHEEL_STEP = 0.03;
-    var WHEEL_COMMIT_MS = 220;
-
-    function asPercent(value) {
-        return Math.round(value * 100) + "%";
-    }
-
-    var KNOB_SPECS = [
-        {
-            id: "speed",
-            label: "Speed",
-            min: 40,
-            max: 900,
-            step: 10,
-            value: 220,
-            format: function (v) { return String(Math.round(v)); },
-        },
-        {
-            id: "attack",
-            label: "Attack",
-            min: 0,
-            max: 0.3,
-            step: 0.005,
-            value: 0.02,
-            format: function (v) { return Math.round(v * 1000) + "ms"; },
-        },
-        {
-            id: "notes",
-            label: "Notes",
-            min: 0,
-            max: 1,
-            step: 0.01,
-            value: 0.8,
-            format: asPercent,
-        },
-        {
-            id: "backingLevel",
-            label: "Backing",
-            min: 0,
-            max: 1,
-            step: 0.01,
-            value: 0.7,
-            format: asPercent,
-        },
-        {
-            id: "reverb",
-            label: "Reverb",
-            min: 0,
-            max: 1,
-            step: 0.01,
-            value: 0.38,
-            format: asPercent,
-        },
-    ];
-
-    function renderKnob(knob) {
-        var spec = knob.spec;
-        var value = Number(knob.input.value);
-        var ratio = (value - spec.min) / (spec.max - spec.min);
-        knob.fill.style.strokeDashoffset = String(ARC_LENGTH * (1 - ratio));
-        knob.tick.setAttribute(
-            "transform",
-            "rotate(" + (225 + 270 * ratio).toFixed(2) + " 24 24)"
-        );
-        knob.valueEl.textContent = spec.format(value);
-        knob.el.setAttribute("aria-valuenow", String(value));
-        knob.el.setAttribute("aria-valuetext", spec.format(value));
-    }
-
-    function quantize(spec, raw) {
-        var clamped = Math.max(spec.min, Math.min(spec.max, raw));
-        var steps = Math.round((clamped - spec.min) / spec.step);
-        return Number((spec.min + steps * spec.step).toFixed(6));
-    }
-
-    function applyKnob(knob, raw, commit, silent) {
-        var next = quantize(knob.spec, raw);
-        var changed = next !== Number(knob.input.value);
-        if (changed) {
-            knob.input.value = String(next);
-            renderKnob(knob);
-            if (!silent) knob.input.dispatchEvent(new Event("input"));
-        }
-        if (commit && !silent) knob.input.dispatchEvent(new Event("change"));
-    }
-
-    function nudgeKnob(knob, ratioDelta, commit) {
-        var spec = knob.spec;
-        applyKnob(
-            knob,
-            Number(knob.input.value) + ratioDelta * (spec.max - spec.min),
-            commit,
-            false
-        );
-    }
-
-    function buildKnob(spec) {
-        var input = document.createElement("input");
-        input.type = "range";
-        input.id = spec.id;
-        input.min = String(spec.min);
-        input.max = String(spec.max);
-        input.step = String(spec.step);
-        input.value = String(spec.value);
-        input.hidden = true;
-
-        var el = document.createElement("div");
-        el.className = "knob";
-        el.tabIndex = 0;
-        el.setAttribute("role", "slider");
-        el.setAttribute("aria-label", spec.label);
-        el.setAttribute("aria-valuemin", String(spec.min));
-        el.setAttribute("aria-valuemax", String(spec.max));
-        el.innerHTML =
-            '<svg viewBox="0 0 48 48" aria-hidden="true">' +
-            '<path class="k-track" d="' + ARC_PATH + '"/>' +
-            '<path class="k-fill" d="' + ARC_PATH + '"/>' +
-            '<circle class="k-cap" cx="24" cy="24" r="12.5"/>' +
-            '<line class="k-tick" x1="24" y1="16.4" x2="24" y2="11.6"/>' +
-            "</svg>" +
-            '<div class="k-label"></div>' +
-            '<div class="k-value"></div>';
-
-        var knob = {
-            spec: spec,
-            input: input,
-            el: el,
-            fill: el.querySelector(".k-fill"),
-            tick: el.querySelector(".k-tick"),
-            valueEl: el.querySelector(".k-value"),
-            dragging: false,
-            lastY: 0,
-            wheelTimer: null,
-        };
-        el.querySelector(".k-label").textContent = spec.label;
-
-        el.addEventListener("pointerdown", function (event) {
-            event.preventDefault();
-            el.setPointerCapture(event.pointerId);
-            el.focus();
-            knob.dragging = true;
-            knob.lastY = event.clientY;
-            el.classList.add("live");
-        });
-        el.addEventListener("pointermove", function (event) {
-            if (!knob.dragging) return;
-            var dy = knob.lastY - event.clientY;
-            knob.lastY = event.clientY;
-            nudgeKnob(knob, dy / (event.shiftKey ? DRAG_PX * FINE : DRAG_PX), false);
-        });
-        var release = function () {
-            if (!knob.dragging) return;
-            knob.dragging = false;
-            el.classList.remove("live");
-            knob.input.dispatchEvent(new Event("change"));
-        };
-        el.addEventListener("pointerup", release);
-        el.addEventListener("pointercancel", release);
-        el.addEventListener("dblclick", function () {
-            applyKnob(knob, spec.value, true, false);
-        });
-        el.addEventListener(
-            "wheel",
-            function (event) {
-                event.preventDefault();
-                nudgeKnob(knob, event.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP, false);
-                clearTimeout(knob.wheelTimer);
-                knob.wheelTimer = setTimeout(function () {
-                    knob.input.dispatchEvent(new Event("change"));
-                }, WHEEL_COMMIT_MS);
-            },
-            { passive: false }
-        );
-        el.addEventListener("keydown", function (event) {
-            if (event.key === "Home") {
-                event.preventDefault();
-                applyKnob(knob, spec.min, true, false);
-                return;
-            }
-            if (event.key === "End") {
-                event.preventDefault();
-                applyKnob(knob, spec.max, true, false);
-                return;
-            }
-            var up = event.key === "ArrowUp" || event.key === "ArrowRight";
-            var down = event.key === "ArrowDown" || event.key === "ArrowLeft";
-            if (!up && !down) return;
-            event.preventDefault();
-            var amount = spec.step * (event.shiftKey ? 10 : 1);
-            applyKnob(
-                knob,
-                Number(input.value) + (up ? amount : -amount),
-                true,
-                false
-            );
-        });
-
-        rack.appendChild(el);
-        rack.appendChild(input);
-        renderKnob(knob);
-        return knob;
-    }
-
-    var knobs = {};
-    KNOB_SPECS.forEach(function (spec) {
-        knobs[spec.id] = buildKnob(spec);
-    });
-    var speedInput = knobs.speed.input;
-    var attackInput = knobs.attack.input;
-    var backingLevelInput = knobs.backingLevel.input;
-    var notesInput = knobs.notes.input;
-    var reverbInput = knobs.reverb.input;
+    applyTheme(themeStyle.textContent);
 
     var LOOKAHEAD = 0.25;
     var PROGRESS_MS = 33;
@@ -1008,9 +1003,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
     var LIMIT_ATTACK = 0.002;
     var LIMIT_RELEASE = 0.18;
     var LIMIT_TRIM = 0.821;
-    var RING_LENGTH = 339.292;
-    var PLAY_PATH = "M9 5.5v13l10-6.5z";
-    var STOP_PATH = "M7.5 7.5h9v9h-9z";
 
     var score = null;
     var audio = null;
@@ -1049,7 +1041,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         if (!Ctor) return null;
         var ctx = new Ctor();
         var master = ctx.createGain();
-        master.gain.value = 1;
+        master.gain.value = settings.volume;
         master.connect(ctx.destination);
         var trim = ctx.createGain();
         trim.gain.value = LIMIT_TRIM;
@@ -1074,7 +1066,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var convolver = ctx.createConvolver();
         convolver.buffer = makeImpulse(ctx, 2.8, 2.6);
         var wet = ctx.createGain();
-        wet.gain.value = Number(reverbInput.value);
+        wet.gain.value = settings.reverb;
         send.connect(tone);
         tone.connect(convolver);
         convolver.connect(wet);
@@ -1202,8 +1194,8 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * Number(backingLevelInput.value);
-        else peak *= Number(notesInput.value);
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * BACKING_LEVEL;
+        else peak *= NOTES_LEVEL;
         var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
         var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
@@ -1211,7 +1203,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             ? ARP_ATTACK
             : note.b
               ? (note.d >= BACKING_PAD_MIN_SEC ? BACKING_PAD_ATTACK : BACKING_PLUCK_ATTACK)
-              : Math.max(MIN_ATTACK, Number(attackInput.value));
+              : Math.max(MIN_ATTACK, settings.attack);
         var osc = ctx.createOscillator();
         osc.type = note.b && !note.a ? "triangle" : "sine";
         schedulePitches(osc, at, note.pitches, undefined, note.g);
@@ -1380,11 +1372,7 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
 
     function tickProgress() {
         if (!playing || !score) return;
-        elapsed = Math.max(
-            0,
-            Math.min(score.durationSec, audio.ctx.currentTime - startTime)
-        );
-        render();
+        elapsed = currentElapsed();
         api.postMessage({ type: "progress", t: elapsed });
     }
 
@@ -1394,15 +1382,19 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         cursor = firstVoiceAtOrAfter(now - startTime);
     }
 
+    function currentElapsed() {
+        return Math.max(
+            0,
+            Math.min(score.durationSec, audio.ctx.currentTime - startTime)
+        );
+    }
+
+    // An empty frame still plays: the playhead sweeps it in silence.
     function start() {
-        if (!score || score.voices.length === 0) return;
+        if (!score) return;
         resumeAudio().then(function (ok) {
-            syncPulse();
             if (!ok) {
-                setStatusText(
-                    "Audio stays blocked until you click inside this panel.",
-                    true
-                );
+                markAttention(score.frameIds[0]);
                 return;
             }
             stopTimers();
@@ -1412,13 +1404,13 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
             startTime = now + 0.12 - from;
             elapsed = from;
             rewindScheduling(now);
+            attentionId = null;
             setPlaying(true);
             api.postMessage({ type: "started" });
             pumpTimer = setInterval(pump, 25);
             progressTimer = setInterval(tickProgress, PROGRESS_MS);
             reconcileVoices();
             pump();
-            render();
         });
     }
 
@@ -1435,8 +1427,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         killVoices();
         setPlaying(false);
         elapsed = 0;
-        render();
         api.postMessage({ type: reason });
+    }
+
+    // Holds the position; the next start() resumes from it.
+    function pause() {
+        if (!playing) return;
+        elapsed = currentElapsed();
+        stopTimers();
+        killVoices();
+        setPlaying(false);
+        api.postMessage({ type: "progress", t: elapsed });
+        api.postMessage({ type: "paused" });
     }
 
     function finish() {
@@ -1445,7 +1447,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         fadePendingVoices(audio.ctx.currentTime);
         setPlaying(false);
         elapsed = 0;
-        render();
         api.postMessage({ type: "ended" });
     }
 
@@ -1456,46 +1457,18 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         }
     }
 
-    function setLoop(next, announce) {
+    function setLoop(next) {
         loop = Boolean(next);
-        loopBtn.setAttribute("aria-pressed", loop ? "true" : "false");
         if (!loop && playing && audio) {
             var now = audio.ctx.currentTime;
             fadePendingVoices(now);
             rewindScheduling(now);
         }
-        if (announce) api.postMessage({ type: "loop", value: loop });
     }
 
     function setPlaying(next) {
         playing = next;
-        document.body.classList.toggle("playing", next);
-        playIcon.setAttribute("d", next ? STOP_PATH : PLAY_PATH);
-        playBtn.setAttribute("aria-label", next ? "Stop" : "Play");
-    }
-
-    function render() {
-        var total = score ? score.durationSec : 0;
-        timeEl.innerHTML =
-            "<b>" + elapsed.toFixed(1) + "</b> / " + total.toFixed(1) + "s";
-        var progress = total > 0 ? Math.min(1, elapsed / total) : 0;
-        ring.style.strokeDashoffset = String(RING_LENGTH * (1 - progress));
-    }
-
-    function setStatus(html, warn) {
-        statusEl.innerHTML = html;
-        statusEl.className = warn ? "status hint" : "status";
-    }
-
-    function setStatusText(text, warn) {
-        statusEl.textContent = text;
-        statusEl.className = warn ? "status hint" : "status";
-    }
-
-    function syncPulse() {
-        var waitingForFirstClick =
-            Boolean(score) && score.voices.length > 0 && !playing && !audioUnlocked();
-        playBtn.classList.toggle("pulse", waitingForFirstClick);
+        renderRowStates();
     }
 
     function warpToSpeed(nextSpeed, now) {
@@ -1517,8 +1490,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         score = next;
         rewindScheduling(now);
         reconcileVoices();
-        render();
-        describe();
     }
 
     function seekTo(t) {
@@ -1526,7 +1497,6 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         var target = Math.max(0, Math.min(score.durationSec, t));
         if (!playing) {
             elapsed = target >= score.durationSec ? 0 : target;
-            render();
             api.postMessage({ type: "progress", t: elapsed });
             return;
         }
@@ -1540,245 +1510,997 @@ select:focus-visible { box-shadow: 0 0 0 2px var(--drawdy-ring, #94ba00); }
         rewindScheduling(now);
         reconcileVoices();
         elapsed = target;
-        render();
         api.postMessage({ type: "progress", t: target });
     }
 
-    function inkVoiceCount() {
-        var count = 0;
-        for (var i = 0; i < score.voices.length; i++) if (!score.voices[i].b) count++;
-        return count;
+
+    // ---------------------------------------------------------------- UI
+
+    var fullView = document.getElementById("full");
+    var firstUse = document.getElementById("first-use");
+    var createFrameBtn = document.getElementById("create-frame");
+    var newFrameBtn = document.getElementById("new-frame");
+
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    function describe() {
-        if (!score) return;
-        syncPulse();
-        if (score.voices.length === 0) {
-            setStatusText("Nothing to play in that region.", true);
-            return;
+    function formatTime(sec) {
+        var tenths = Math.round(Math.max(0, sec) * 10);
+        var minutes = Math.floor(tenths / 600);
+        var rest = (tenths - minutes * 600) / 10;
+        return minutes + ":" + (rest < 10 ? "0" : "") + rest.toFixed(1);
+    }
+
+    function unlockAudio() {
+        resumeAudio();
+    }
+
+    // A short sine pluck at "at" (default now). The gain sits at 0 from
+    // creation, so a pluck cancelled before it starts stays silent.
+    function pluck(midi, at, level) {
+        var ctx = audio.ctx;
+        var now = ctx.currentTime;
+        var when = Math.max(now, at === undefined ? now : at);
+        var osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+        var gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.setValueAtTime(0, when);
+        gain.gain.linearRampToValueAtTime(level * tilt(osc.frequency.value), when + 0.006);
+        gain.gain.setTargetAtTime(0.0001, when + 0.06, 0.22);
+        osc.connect(gain);
+        gain.connect(audio.dry);
+        gain.connect(audio.send);
+        osc.start(now);
+        osc.stop(when + 1.6);
+        return { osc: osc, gain: gain };
+    }
+
+    // Range snaps; silent until the panel has been clicked.
+    function previewNote(midi) {
+        if (!audioUnlocked()) return;
+        pluck(midi, undefined, 0.16);
+    }
+
+    var SCALE_PREVIEW_DELAY_MS = 140;
+    var SCALE_PREVIEW_STEP_SEC = 0.11;
+    var SCALE_PREVIEW_TONIC = 60;
+    var scalePreviewTimer = null;
+    var scalePreviewVoices = [];
+
+    function stopScalePreview() {
+        clearTimeout(scalePreviewTimer);
+        scalePreviewTimer = null;
+        if (audio) {
+            var now = audio.ctx.currentTime;
+            scalePreviewVoices.forEach(function (voice) {
+                holdParam(voice.gain.gain, now);
+                voice.gain.gain.setTargetAtTime(0.0001, now, 0.02);
+                voice.osc.stop(now + 0.15);
+            });
         }
-        if (!audioUnlocked()) {
-            setStatusText(
-                "Press play once to let this panel make sound.",
-                true
-            );
-            return;
-        }
-        setStatus(
-            "<b>" +
-                inkVoiceCount() +
-                "</b> voices from <b>" +
-                score.elementCount +
-                "</b> elements<br />" +
-                score.scaleName +
-                " &middot; " +
-                Math.round(score.rectWidth) +
-                "&#215;" +
-                Math.round(score.rectHeight) +
-                " px",
-            false
-        );
+        scalePreviewVoices = [];
     }
 
-    function showBackingKnob(enabled) {
-        knobs.backingLevel.el.hidden = !enabled;
-        rack.classList.toggle("five", enabled);
-    }
-    showBackingKnob(false);
-
-    function showBacking(progressions, value) {
-        backing = value;
-        backingProg.textContent = "";
-        var off = document.createElement("option");
-        off.value = "off";
-        off.textContent = "Off";
-        backingProg.appendChild(off);
-        progressions.forEach(function (name, index) {
-            var option = document.createElement("option");
-            option.value = String(index);
-            option.textContent = name;
-            backingProg.appendChild(option);
-        });
-        backingProg.value = value.enabled ? String(value.progression) : "off";
-        backingVoicing.value = value.voicing;
-        backingRhythm.value = String(value.rhythm);
-        backingCard.classList.toggle("arp-mode", typeof value.rhythm === "string");
-        backingCard.classList.toggle("backing-off", !value.enabled);
-        showBackingKnob(value.enabled);
-    }
-
-    function postBacking() {
-        var choice = backingProg.value;
-        backing = {
-            enabled: choice !== "off",
-            progression: choice === "off" ? backing.progression : Number(choice),
-            voicing: backingVoicing.value,
-            rhythm: isNaN(Number(backingRhythm.value)) ? backingRhythm.value : Number(backingRhythm.value),
-        };
-        backingCard.classList.toggle("backing-off", !backing.enabled);
-        backingCard.classList.toggle("arp-mode", typeof backing.rhythm === "string");
-        showBackingKnob(backing.enabled);
-        api.postMessage({ type: "backing", value: backing });
-    }
-
-    backingProg.addEventListener("change", postBacking);
-    backingVoicing.addEventListener("change", postBacking);
-    backingRhythm.addEventListener("change", postBacking);
-
-    function setFrames(count) {
-        frameCountEl.textContent = String(count);
-        addFrameBtn.textContent =
-            count > 0 ? "Add another Serene frame" : "Add a Serene frame";
-        addFrameBtn.disabled = false;
-    }
-
-    addFrameBtn.addEventListener("click", function () {
-        addFrameBtn.disabled = true;
-        api.postMessage({ type: "add-frame" });
-    });
-
-    loopBtn.addEventListener("click", function () {
-        setLoop(!loop, true);
-    });
-
-    playBtn.addEventListener("click", function () {
-        if (playing) {
-            stop("stopped");
-            return;
-        }
-        start();
-    });
-
-    speedInput.addEventListener("change", function () {
-        api.postMessage({ type: "speed", value: Number(speedInput.value) });
-    });
-
-    function postKnobs() {
-        api.postMessage({
-            type: "knobs",
-            values: {
-                attack: Number(attackInput.value),
-                notes: Number(notesInput.value),
-                backingLevel: Number(backingLevelInput.value),
-                reverb: Number(reverbInput.value),
-            },
+    // One rising octave of the scale from C4, ending on the C above.
+    function playScalePreview(scale) {
+        if (!scale || !audioUnlocked()) return;
+        var start = audio.ctx.currentTime + 0.02;
+        var notes = scale.steps.concat([12]);
+        scalePreviewVoices = notes.map(function (step, index) {
+            return pluck(SCALE_PREVIEW_TONIC + step, start + index * SCALE_PREVIEW_STEP_SEC, 0.13);
         });
     }
 
-    [attackInput, notesInput, backingLevelInput, reverbInput].forEach(function (input) {
-        input.addEventListener("change", postKnobs);
+    function scheduleScalePreview(index) {
+        stopScalePreview();
+        scalePreviewTimer = setTimeout(function () {
+            scalePreviewTimer = null;
+            playScalePreview(scales[index]);
+        }, SCALE_PREVIEW_DELAY_MS);
+    }
+
+    // ---- Tooltip
+
+    var tip = document.getElementById("tooltip");
+    var tipOwner = null;
+
+    function showTip(el, text) {
+        if (!text) return;
+        tipOwner = el;
+        tip.textContent = text;
+        tip.hidden = false;
+        var r = el.getBoundingClientRect();
+        var t = tip.getBoundingClientRect();
+        var left = clamp(r.left + r.width / 2 - t.width / 2, 8, window.innerWidth - t.width - 8);
+        var top = r.top - t.height - 6;
+        if (top < 8) top = r.bottom + 6;
+        tip.style.left = left + "px";
+        tip.style.top = top + "px";
+    }
+
+    function hideTip(el) {
+        if (el && el !== tipOwner) return;
+        tipOwner = null;
+        tip.hidden = true;
+    }
+
+    function bindTip(el, text) {
+        el.addEventListener("pointerenter", function () { showTip(el, text()); });
+        el.addEventListener("pointerleave", function () { hideTip(el); });
+        el.addEventListener("focus", function () {
+            if (el.matches(":focus-visible")) showTip(el, text());
+        });
+        el.addEventListener("blur", function () { hideTip(el); });
+    }
+
+    // ---- Scale select
+
+    var scaleField = document.getElementById("scale-field");
+    var scaleTrigger = document.getElementById("scale-trigger");
+    var scaleValue = document.getElementById("scale-value");
+    var scaleList = document.getElementById("scale-list");
+    var scales = [];
+    var activeOption = -1;
+
+    function selectedScaleIndex() {
+        for (var i = 0; i < scales.length; i++) if (scales[i].id === settings.scale) return i;
+        return 0;
+    }
+
+    function renderScales() {
+        scaleList.textContent = "";
+        scales.forEach(function (scale, index) {
+            var option = document.createElement("div");
+            option.className = "option";
+            option.id = "scale-option-" + index;
+            option.setAttribute("role", "option");
+            option.setAttribute("aria-selected", scale.id === settings.scale ? "true" : "false");
+            option.innerHTML =
+                '<span class="option-text"><span class="option-name"></span><span class="option-desc"></span></span>' +
+                '<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+            option.querySelector(".option-name").textContent = scale.name;
+            option.querySelector(".option-desc").textContent = scale.description;
+            option.addEventListener("pointermove", function () { setActiveOption(index, true); });
+            option.addEventListener("click", function () { chooseScale(index); });
+            scaleList.appendChild(option);
+        });
+        var current = scales[selectedScaleIndex()];
+        scaleValue.textContent = current ? current.name : "";
+    }
+
+    function setActiveOption(index, preview) {
+        if (index === activeOption) return;
+        activeOption = index;
+        if (preview) scheduleScalePreview(index);
+        var options = scaleList.children;
+        for (var i = 0; i < options.length; i++) {
+            options[i].classList.toggle("active", i === index);
+        }
+        if (options[index]) scaleList.setAttribute("aria-activedescendant", options[index].id);
+    }
+
+    function openSelect() {
+        if (!scales.length) return;
+        // Opening is a click or key press in the panel, so sound may start here.
+        unlockAudio();
+        scaleList.hidden = false;
+        scaleTrigger.setAttribute("aria-expanded", "true");
+        activeOption = -1;
+        setActiveOption(selectedScaleIndex());
+        scaleList.focus({ preventScroll: true });
+    }
+
+    function closeSelect(refocus) {
+        if (scaleList.hidden) return;
+        stopScalePreview();
+        scaleList.hidden = true;
+        scaleTrigger.setAttribute("aria-expanded", "false");
+        if (refocus) scaleTrigger.focus({ preventScroll: true });
+    }
+
+    function chooseScale(index) {
+        var scale = scales[index];
+        closeSelect(true);
+        if (!scale || scale.id === settings.scale) return;
+        settings.scale = scale.id;
+        renderScales();
+        api.postMessage({ type: "scale", value: scale.id });
+    }
+
+    scaleTrigger.addEventListener("click", function () {
+        if (scaleList.hidden) openSelect();
+        else closeSelect(false);
+    });
+    scaleTrigger.addEventListener("keydown", function (event) {
+        if (["ArrowDown", "ArrowUp", "Enter", " "].indexOf(event.key) < 0) return;
+        event.preventDefault();
+        openSelect();
+    });
+    scaleList.addEventListener("keydown", function (event) {
+        var last = scales.length - 1;
+        switch (event.key) {
+            case "ArrowDown": setActiveOption(Math.min(last, activeOption + 1), true); break;
+            case "ArrowUp": setActiveOption(Math.max(0, activeOption - 1), true); break;
+            case "Home": setActiveOption(0, true); break;
+            case "End": setActiveOption(last, true); break;
+            case "Enter":
+            case " ": chooseScale(activeOption); break;
+            case "Escape": closeSelect(true); break;
+            case "Tab": closeSelect(false); return;
+            default: return;
+        }
+        event.preventDefault();
+    });
+    document.addEventListener("pointerdown", function (event) {
+        if (!scaleField.contains(event.target)) closeSelect(false);
     });
 
-    function applySettings(values) {
-        ["attack", "notes", "backingLevel", "reverb"].forEach(function (key) {
-            if (typeof values[key] === "number") {
-                applyKnob(knobs[key], values[key], false, true);
+    // ---- Range piano
+
+    var piano = document.getElementById("piano");
+    var keysEl = document.getElementById("keys");
+    var band = document.getElementById("band");
+    var handleLow = document.getElementById("handle-low");
+    var handleHigh = document.getElementById("handle-high");
+    var labelsEl = document.getElementById("piano-labels");
+    var rangeValue = document.getElementById("range-value");
+    var blackKeys = [];
+    var keyLabels = [];
+    var rangeDrag = null;
+
+    (function buildPiano() {
+        var width = 100 / WHITE_KEYS;
+        for (var i = 0; i < WHITE_KEYS; i++) {
+            var white = document.createElement("div");
+            white.className = "key white";
+            white.style.left = i * width + "%";
+            white.style.width = width + "%";
+            keysEl.appendChild(white);
+        }
+        // Black keys sit after C, D, F, G and A of each octave.
+        [0, 1, 3, 4, 5].forEach(function (offset) {
+            for (var octave = 0; octave < MAX_OCTAVE - MIN_OCTAVE; octave++) {
+                var index = octave * 7 + offset;
+                var black = document.createElement("div");
+                black.className = "key black";
+                black.style.left = (index + 1) * width + "%";
+                keysEl.appendChild(black);
+                blackKeys.push({ el: black, index: index });
             }
         });
-        if (typeof values.speed === "number") {
-            applyKnob(knobs.speed, values.speed, false, true);
+        for (var o = MIN_OCTAVE; o <= MAX_OCTAVE; o++) {
+            var label = document.createElement("span");
+            label.className = "key-label";
+            if (o === MIN_OCTAVE) label.classList.add("first");
+            if (o === MAX_OCTAVE) label.classList.add("last");
+            label.style.left = o === MIN_OCTAVE ? "0" : ((o - 1) * 7 + 0.5) * width + "%";
+            label.textContent = "C" + o;
+            labelsEl.appendChild(label);
+            keyLabels.push(label);
         }
-        if (typeof values.loop === "boolean") setLoop(values.loop, false);
-        if (typeof values.lowOctave === "number" && typeof values.highOctave === "number") {
-            showRange(values.lowOctave, values.highOctave);
-        }
-        if (audio) {
-            audio.wet.gain.setTargetAtTime(Number(reverbInput.value), audio.ctx.currentTime, 0.02);
-        }
+    })();
+
+    function lowEdge(octave) {
+        return ((octave - 1) * 7) / WHITE_KEYS;
     }
 
-    reverbInput.addEventListener("input", function () {
-        if (audio) {
-            audio.wet.gain.setTargetAtTime(
-                Number(reverbInput.value),
-                audio.ctx.currentTime,
-                0.02
-            );
-        }
-    });
-
-    function postRange(changed) {
-        var low = Number(lowSelect.value);
-        var high = Number(highSelect.value);
-        if (low >= high) {
-            if (changed === "low") high = Math.min(MAX_OCTAVE, low + 1);
-            else low = Math.max(MIN_OCTAVE, high - 1);
-        }
-        showRange(low, high);
-        api.postMessage({ type: "range", low: low, high: high });
+    function highEdge(octave) {
+        return ((octave - 1) * 7 + 1) / WHITE_KEYS;
     }
 
-    lowSelect.addEventListener("change", function () { postRange("low"); });
-    highSelect.addEventListener("change", function () { postRange("high"); });
+    function renderRange() {
+        var low = settings.lowOctave;
+        var high = settings.highOctave;
+        var from = lowEdge(low);
+        var to = highEdge(high);
+        band.style.left = from * 100 + "%";
+        band.style.width = (to - from) * 100 + "%";
+        handleLow.style.left = from * 100 + "%";
+        handleHigh.style.left = to * 100 + "%";
+        var lowIndex = (low - 1) * 7;
+        var highIndex = (high - 1) * 7;
+        blackKeys.forEach(function (key) {
+            key.el.classList.toggle("in-range", key.index >= lowIndex && key.index < highIndex);
+        });
+        keyLabels.forEach(function (label, i) {
+            var octave = i + MIN_OCTAVE;
+            label.classList.toggle("end", octave === low || octave === high);
+        });
+        rangeValue.textContent = "C" + low + " to C" + high;
+        [[handleLow, low, MIN_OCTAVE, high - 1], [handleHigh, high, low + 1, MAX_OCTAVE]].forEach(function (h) {
+            h[0].setAttribute("aria-valuenow", String(h[1]));
+            h[0].setAttribute("aria-valuetext", "C" + h[1]);
+            h[0].setAttribute("aria-valuemin", String(h[2]));
+            h[0].setAttribute("aria-valuemax", String(h[3]));
+        });
+    }
 
-    scaleSelect.addEventListener("change", function () {
-        api.postMessage({ type: "scale", value: scaleSelect.value });
+    function clampOctave(which, octave) {
+        return which === "low"
+            ? clamp(octave, MIN_OCTAVE, settings.highOctave - 1)
+            : clamp(octave, settings.lowOctave + 1, MAX_OCTAVE);
+    }
+
+    function setOctave(which, octave) {
+        var key = which === "low" ? "lowOctave" : "highOctave";
+        var next = clampOctave(which, octave);
+        if (settings[key] === next) return;
+        settings[key] = next;
+        renderRange();
+        previewNote(12 * (next + 1));
+        api.postMessage({ type: "range", low: settings.lowOctave, high: settings.highOctave });
+    }
+
+    function keyPosition(clientX) {
+        var r = keysEl.getBoundingClientRect();
+        return ((clientX - r.left) / r.width) * WHITE_KEYS;
+    }
+
+    function octaveAt(which, clientX) {
+        var x = keyPosition(clientX);
+        return which === "low" ? Math.round(x / 7) + 1 : Math.round((x - 1) / 7) + 1;
+    }
+
+    function handleFor(which) {
+        return which === "low" ? handleLow : handleHigh;
+    }
+
+    piano.addEventListener("pointerdown", function (event) {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        unlockAudio();
+        var handle = event.target.closest(".handle");
+        var which;
+        if (handle) {
+            which = handle === handleLow ? "low" : "high";
+        } else {
+            // Clicking a key moves the handle nearest in pitch to that octave's C.
+            var index = clamp(Math.floor(keyPosition(event.clientX)), 0, WHITE_KEYS - 1);
+            var octave = Math.min(MAX_OCTAVE, Math.floor(index / 7) + 1);
+            var toLow = Math.abs(octave - settings.lowOctave);
+            var toHigh = Math.abs(octave - settings.highOctave);
+            which = toLow < toHigh ? "low" : toHigh < toLow ? "high" : octave <= settings.lowOctave ? "low" : "high";
+            setOctave(which, octave);
+        }
+        rangeDrag = { which: which, pointerId: event.pointerId };
+        piano.setPointerCapture(event.pointerId);
+        handleFor(which).classList.add("dragging");
+        handleFor(which).focus({ preventScroll: true });
+    });
+    piano.addEventListener("pointermove", function (event) {
+        if (!rangeDrag || event.pointerId !== rangeDrag.pointerId) return;
+        setOctave(rangeDrag.which, octaveAt(rangeDrag.which, event.clientX));
+    });
+    function endRangeDrag() {
+        if (!rangeDrag) return;
+        handleFor(rangeDrag.which).classList.remove("dragging");
+        rangeDrag = null;
+    }
+    piano.addEventListener("pointerup", endRangeDrag);
+    piano.addEventListener("pointercancel", endRangeDrag);
+
+    [[handleLow, "low"], [handleHigh, "high"]].forEach(function (pair) {
+        pair[0].addEventListener("keydown", function (event) {
+            var which = pair[1];
+            var current = which === "low" ? settings.lowOctave : settings.highOctave;
+            var next;
+            switch (event.key) {
+                case "ArrowLeft":
+                case "ArrowDown": next = current - 1; break;
+                case "ArrowRight":
+                case "ArrowUp": next = current + 1; break;
+                case "Home": next = MIN_OCTAVE; break;
+                case "End": next = MAX_OCTAVE; break;
+                default: return;
+            }
+            event.preventDefault();
+            unlockAudio();
+            setOctave(which, next);
+        });
     });
 
-    api.onMessage(function (msg) {
-        if (!msg || typeof msg !== "object") return;
-        if (msg.type === "theme") {
-            themeStyle.textContent = ":root{" + msg.css + "}";
+    // ---- Backing segmented control
+
+    var backingEl = document.getElementById("backing");
+    var backingOptions = [];
+
+    function backingIndex() {
+        return settings.backing.enabled ? settings.backing.progression : -1;
+    }
+
+    function renderBacking() {
+        backingEl.textContent = "";
+        var items = [{ name: "Off", tip: "No backing chords", index: -1 }].concat(
+            backingOptions.map(function (option, index) {
+                return { name: option.name, tip: "Chords " + option.progression, index: index };
+            })
+        );
+        items.forEach(function (item) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "segment";
+            button.setAttribute("role", "radio");
+            button.dataset.index = String(item.index);
+            button.dataset.tip = item.tip;
+            button.textContent = item.name;
+            button.addEventListener("click", function () { chooseBacking(item.index); });
+            bindTip(button, function () { return item.tip; });
+            backingEl.appendChild(button);
+        });
+        updateBacking();
+    }
+
+    function updateBacking() {
+        var current = backingIndex();
+        Array.prototype.forEach.call(backingEl.children, function (button) {
+            var on = Number(button.dataset.index) === current;
+            button.setAttribute("aria-checked", on ? "true" : "false");
+            button.tabIndex = on ? 0 : -1;
+        });
+    }
+
+    function chooseBacking(index) {
+        if (index === backingIndex()) return;
+        settings.backing =
+            index < 0
+                ? { enabled: false, progression: settings.backing.progression }
+                : { enabled: true, progression: index };
+        updateBacking();
+        api.postMessage({ type: "backing", value: settings.backing });
+    }
+
+    backingEl.addEventListener("keydown", function (event) {
+        var buttons = Array.prototype.slice.call(backingEl.children);
+        var at = buttons.indexOf(document.activeElement);
+        if (at < 0) return;
+        var next;
+        switch (event.key) {
+            case "ArrowLeft":
+            case "ArrowUp": next = (at - 1 + buttons.length) % buttons.length; break;
+            case "ArrowRight":
+            case "ArrowDown": next = (at + 1) % buttons.length; break;
+            case "Home": next = 0; break;
+            case "End": next = buttons.length - 1; break;
+            default: return;
+        }
+        event.preventDefault();
+        chooseBacking(Number(buttons[next].dataset.index));
+        buttons[next].focus();
+        showTip(buttons[next], buttons[next].dataset.tip);
+    });
+
+    // ---- Feel
+
+    var feel = document.getElementById("feel");
+    var feelToggle = document.getElementById("feel-toggle");
+    var feelBody = document.getElementById("feel-body");
+    var feelSummary = document.getElementById("feel-summary");
+    var slidersEl = document.getElementById("sliders");
+    var VALUE_INSET = 10;
+    var MAP_START = 6;
+    var MAP_GAP = 8;
+    var MARK_GAP = 8;
+    var KEY_ACTIVE_MS = 700;
+    var SPEED_POST_MS = 120;
+
+    function formatSpeed(v) {
+        var hundredths = Math.round(v * 100);
+        return (hundredths % 10 === 0 ? v.toFixed(1) : v.toFixed(2)) + "\u00d7";
+    }
+
+    function formatMs(v) {
+        return Math.round(v * 1000) + "ms";
+    }
+
+    function formatPercent(v) {
+        return Math.round(v * 100) + "%";
+    }
+
+    var SLIDERS = [
+        { key: "speed", label: "Speed", min: 0.5, max: 2, step: 0.05, def: 1, marks: "ticks", widest: "0.55\u00d7", format: formatSpeed },
+        { key: "attack", label: "Attack", min: 0, max: 1, step: 0.01, def: 0.02, marks: "dots", widest: "1000ms", format: formatMs, hint: "Lower is sharper, higher is softer" },
+        { key: "volume", label: "Volume", min: 0, max: 1, step: 0.01, def: 0.7, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "reverb", label: "Reverb", min: 0, max: 1, step: 0.01, def: 0.3, marks: "dots", widest: "100%", format: formatPercent },
+    ];
+
+    function quantize(spec, raw) {
+        var steps = Math.round((clamp(raw, spec.min, spec.max) - spec.min) / spec.step);
+        return Number((spec.min + steps * spec.step).toFixed(4));
+    }
+
+    var speedPostTimer = null;
+
+    function postSpeed() {
+        clearTimeout(speedPostTimer);
+        speedPostTimer = null;
+        api.postMessage({ type: "speed", value: settings.speed });
+    }
+
+    function liveApply(key) {
+        if (key === "speed") {
+            renderRowStates();
+            // Heard immediately, without rebuilding the score on every pixel.
+            if (!speedPostTimer) speedPostTimer = setTimeout(postSpeed, SPEED_POST_MS);
             return;
         }
-        if (msg.type === "stop") {
-            stop("stopped");
+        if (!audio) return;
+        var now = audio.ctx.currentTime;
+        if (key === "volume") audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
+        if (key === "reverb") audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
+    }
+
+    function commitSlider(slider) {
+        if (slider.spec.key === "speed") {
+            postSpeed();
             return;
         }
-        if (msg.type === "frames") {
-            setFrames(msg.count);
+        api.postMessage({
+            type: "knobs",
+            values: { attack: settings.attack, volume: settings.volume, reverb: settings.reverb },
+        });
+    }
+
+    function renderSummary() {
+        feelSummary.textContent =
+            settings.speed.toFixed(2) + "\u00d7 \u00b7 " + formatMs(settings.attack) + " \u00b7 " + formatPercent(settings.volume);
+    }
+
+    function measureText(text) {
+        var probe = document.createElement("span");
+        probe.className = "measure";
+        probe.textContent = text;
+        document.body.appendChild(probe);
+        var width = probe.getBoundingClientRect().width;
+        probe.remove();
+        return Math.ceil(width);
+    }
+
+    function layoutSlider(slider) {
+        var width = slider.el.clientWidth;
+        if (!width) return;
+        // Room for the widest value, so the value never shifts.
+        var valueWidth = measureText(slider.spec.widest);
+        slider.valueEl.style.width = valueWidth + "px";
+        var valueStart = width - VALUE_INSET - valueWidth;
+        slider.geom = {
+            from: MAP_START,
+            to: valueStart - MAP_GAP,
+            marksFrom: slider.labelEl.offsetLeft + slider.labelEl.offsetWidth + MARK_GAP,
+            marksTo: valueStart - MARK_GAP,
+            labelEnd: slider.labelEl.offsetLeft + slider.labelEl.offsetWidth,
+        };
+        renderSlider(slider);
+    }
+
+    function sliderX(slider, value) {
+        var g = slider.geom;
+        var ratio = (value - slider.spec.min) / (slider.spec.max - slider.spec.min);
+        return g.from + ratio * (g.to - g.from);
+    }
+
+    function renderSlider(slider) {
+        var spec = slider.spec;
+        var value = settings[spec.key];
+        slider.valueEl.textContent = spec.format(value);
+        slider.el.setAttribute("aria-valuenow", String(value));
+        slider.el.setAttribute("aria-valuetext", spec.format(value));
+        if (!slider.geom) return;
+        var x = sliderX(slider, value);
+        slider.indicator.style.transform = "translateX(" + (x - 1).toFixed(1) + "px)";
+        // Low values put the indicator under the label text; the fill still shows them.
+        slider.indicator.hidden = x < slider.geom.labelEnd + 3;
+        slider.fill.style.width = Math.max(0, x + 4 - 2).toFixed(1) + "px";
+        var g = slider.geom;
+        slider.marks.forEach(function (mark) {
+            var mx = sliderX(slider, mark.value);
+            var visible =
+                mx >= g.marksFrom &&
+                mx <= g.marksTo &&
+                Math.abs(mx - x) > 3 &&
+                (spec.marks === "ticks" || mx > x);
+            mark.el.hidden = !visible;
+            mark.el.style.left = mx.toFixed(1) + "px";
+        });
+    }
+
+    function setSliderValue(slider, value, commit) {
+        var key = slider.spec.key;
+        if (settings[key] !== value) {
+            settings[key] = value;
+            renderSlider(slider);
+            renderSummary();
+            liveApply(key);
+        }
+        if (commit) commitSlider(slider);
+    }
+
+    function buildSlider(spec) {
+        var el = document.createElement("div");
+        el.className = "slider";
+        el.tabIndex = 0;
+        el.setAttribute("role", "slider");
+        el.setAttribute("aria-label", spec.label);
+        el.setAttribute("aria-valuemin", String(spec.min));
+        el.setAttribute("aria-valuemax", String(spec.max));
+        el.innerHTML =
+            '<div class="s-fill"></div><div class="s-marks"></div>' +
+            '<span class="s-label"></span><span class="s-value"></span><span class="s-indicator"></span>';
+        var slider = {
+            spec: spec,
+            el: el,
+            fill: el.querySelector(".s-fill"),
+            labelEl: el.querySelector(".s-label"),
+            valueEl: el.querySelector(".s-value"),
+            indicator: el.querySelector(".s-indicator"),
+            marks: [],
+            geom: null,
+            dragging: false,
+            keyTimer: null,
+        };
+        slider.labelEl.textContent = spec.label;
+
+        var markValues = [];
+        if (spec.marks === "ticks") {
+            for (var tenths = Math.round(spec.min * 10) + 1; tenths < Math.round(spec.max * 10); tenths++) {
+                markValues.push(tenths / 10);
+            }
+        } else {
+            for (var p = 1; p < 10; p++) markValues.push(spec.min + ((spec.max - spec.min) * p) / 10);
+        }
+        var marksEl = el.querySelector(".s-marks");
+        markValues.forEach(function (value) {
+            var mark = document.createElement("span");
+            mark.className = spec.marks === "ticks" ? "s-tick" : "s-dot";
+            marksEl.appendChild(mark);
+            slider.marks.push({ el: mark, value: value });
+        });
+
+        function valueAt(clientX) {
+            var g = slider.geom;
+            var r = el.getBoundingClientRect();
+            var ratio = clamp((clientX - r.left - g.from) / (g.to - g.from), 0, 1);
+            var value = quantize(spec, spec.min + ratio * (spec.max - spec.min));
+            if (spec.key === "speed" && Math.abs(value - 1) <= 0.06) value = 1;
+            return value;
+        }
+
+        function setActive(on) {
+            el.classList.toggle("active", on);
+        }
+
+        el.addEventListener("pointerdown", function (event) {
+            if (event.button !== 0 || !slider.geom) return;
+            event.preventDefault();
+            el.focus({ preventScroll: true });
+            el.setPointerCapture(event.pointerId);
+            slider.dragging = true;
+            hideTip(el);
+            setActive(true);
+            setSliderValue(slider, valueAt(event.clientX), false);
+        });
+        el.addEventListener("pointermove", function (event) {
+            if (!slider.dragging) return;
+            setSliderValue(slider, valueAt(event.clientX), false);
+        });
+        function release() {
+            if (!slider.dragging) return;
+            slider.dragging = false;
+            if (!slider.keyTimer) setActive(false);
+            commitSlider(slider);
+        }
+        el.addEventListener("pointerup", release);
+        el.addEventListener("pointercancel", release);
+        el.addEventListener("dblclick", function () {
+            setSliderValue(slider, spec.def, true);
+        });
+        el.addEventListener("keydown", function (event) {
+            var value = settings[spec.key];
+            var big = (spec.max - spec.min) / 10;
+            var next;
+            switch (event.key) {
+                case "ArrowRight":
+                case "ArrowUp": next = value + (event.shiftKey ? big : spec.step); break;
+                case "ArrowLeft":
+                case "ArrowDown": next = value - (event.shiftKey ? big : spec.step); break;
+                case "PageUp": next = value + big; break;
+                case "PageDown": next = value - big; break;
+                case "Home": next = spec.min; break;
+                case "End": next = spec.max; break;
+                default: return;
+            }
+            event.preventDefault();
+            hideTip(el);
+            setActive(true);
+            clearTimeout(slider.keyTimer);
+            slider.keyTimer = setTimeout(function () {
+                slider.keyTimer = null;
+                if (!slider.dragging) setActive(false);
+            }, KEY_ACTIVE_MS);
+            setSliderValue(slider, quantize(spec, next), true);
+        });
+        el.addEventListener("blur", function () {
+            clearTimeout(slider.keyTimer);
+            slider.keyTimer = null;
+            if (!slider.dragging) setActive(false);
+        });
+        if (spec.hint) {
+            bindTip(el, function () { return slider.dragging ? "" : spec.hint; });
+        }
+        slidersEl.appendChild(el);
+        renderSlider(slider);
+        return slider;
+    }
+
+    var sliders = SLIDERS.map(buildSlider);
+
+    function layoutSliders() {
+        sliders.forEach(layoutSlider);
+    }
+
+    function renderSliders() {
+        sliders.forEach(renderSlider);
+        renderSummary();
+    }
+
+    function setFeelOpen(open) {
+        feel.classList.toggle("open", open);
+        feelToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        feelBody.inert = !open;
+    }
+    setFeelOpen(false);
+    feelToggle.addEventListener("click", function () {
+        setFeelOpen(!feel.classList.contains("open"));
+    });
+
+    if (window.ResizeObserver) new ResizeObserver(layoutSliders).observe(slidersEl);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutSliders);
+
+    // ---- Frames
+
+    var frameList = document.getElementById("frame-list");
+    var frames = [];
+    var selectedIds = [];
+
+    function isPlayingFrame(id) {
+        return playing && Boolean(score) && score.frameIds.indexOf(id) >= 0;
+    }
+
+    function markAttention(id) {
+        attentionId = id || null;
+        renderRowStates();
+    }
+
+    function frameDuration(frame) {
+        return frame.width / (BASE_PX_PER_SECOND * settings.speed);
+    }
+
+    var SVG_NS = "http://www.w3.org/2000/svg";
+
+    function buildThumb(frame) {
+        var svg = document.createElementNS(SVG_NS, "svg");
+        var height = (THUMB_WIDTH * frame.height) / frame.width;
+        svg.setAttribute("viewBox", "0 0 " + THUMB_WIDTH + " " + height.toFixed(1));
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+        svg.setAttribute("aria-hidden", "true");
+        frame.strokes.forEach(function (stroke) {
+            var path = document.createElementNS(SVG_NS, "path");
+            path.setAttribute("d", stroke.d);
+            if (stroke.color) path.style.stroke = stroke.color;
+            svg.appendChild(path);
+        });
+        var thumb = document.createElement("div");
+        thumb.className = "thumb";
+        thumb.appendChild(svg);
+        return thumb;
+    }
+
+    function buildRow(frame) {
+        var row = document.createElement("li");
+        row.className = "frame-row";
+        row.dataset.id = frame.id;
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.appendChild(buildThumb(frame));
+
+        var text = document.createElement("div");
+        text.className = "frame-text";
+        text.innerHTML =
+            '<div class="frame-name"><span class="name-text"></span><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></div>' +
+            '<div class="frame-dur"></div>';
+        text.querySelector(".name-text").textContent = frame.name;
+        row.appendChild(text);
+
+        var play = document.createElement("button");
+        play.type = "button";
+        play.className = "icon-btn play";
+        row.appendChild(play);
+
+        row.addEventListener("click", function (event) {
+            if (event.target.closest(".play")) return;
+            api.postMessage({ type: "focus-frame", id: frame.id });
+        });
+        row.addEventListener("keydown", function (event) {
+            if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            api.postMessage({ type: "focus-frame", id: frame.id });
+        });
+        play.addEventListener("click", function () {
+            playFrame(frame.id);
+        });
+        return row;
+    }
+
+    function playFrame(id) {
+        if (isPlayingFrame(id)) {
+            pause();
             return;
         }
-        if (msg.type === "settings") {
-            applySettings(msg.values);
-            return;
-        }
-        if (msg.type === "seek") {
-            seekTo(msg.t);
-            return;
-        }
-        if (msg.type === "backing") {
-            showBacking(msg.progressions, msg.value);
-            return;
-        }
-        if (msg.type === "scales") {
-            scaleSelect.textContent = "";
-            msg.scales.forEach(function (scale) {
-                var option = document.createElement("option");
-                option.value = scale.id;
-                option.textContent = scale.name;
-                scaleSelect.appendChild(option);
+        // Resume inside the click so the browser lets this panel make sound.
+        unlockAudio();
+        attentionId = null;
+        renderRowStates();
+        api.postMessage({ type: "play-frame", id: id });
+    }
+
+    function renderRowStates() {
+        Array.prototype.forEach.call(frameList.children, function (row) {
+            var id = row.dataset.id;
+            var frame = null;
+            for (var i = 0; i < frames.length; i++) if (frames[i].id === id) frame = frames[i];
+            if (!frame) return;
+            var on = isPlayingFrame(id);
+            var duration = formatTime(frameDuration(frame));
+            row.classList.toggle("selected", selectedIds.indexOf(id) >= 0);
+            row.classList.toggle("playing", on);
+            row.setAttribute("aria-label", frame.name + ", " + duration);
+            row.querySelector(".frame-dur").textContent = duration;
+            var play = row.querySelector(".play");
+            if (play.dataset.state !== (on ? "pause" : "play")) {
+                play.dataset.state = on ? "pause" : "play";
+                play.innerHTML = on ? PAUSE_ICON : PLAY_ICON;
+            }
+            play.setAttribute("aria-label", (on ? "Pause " : "Play ") + frame.name);
+            play.setAttribute("aria-pressed", on ? "true" : "false");
+            play.classList.toggle("attention", attentionId === id && !on);
+        });
+    }
+
+    function renderFrames() {
+        var any = frames.length > 0;
+        fullView.hidden = !any;
+        firstUse.hidden = any;
+        createFrameBtn.disabled = false;
+        newFrameBtn.disabled = false;
+        var active = document.activeElement;
+        var focusRow = active && active.closest ? active.closest(".frame-row") : null;
+        var focusId = focusRow ? focusRow.dataset.id : null;
+        var focusPlay = Boolean(focusRow) && active.classList.contains("play");
+        frameList.textContent = "";
+        frames.forEach(function (frame) {
+            frameList.appendChild(buildRow(frame));
+        });
+        renderRowStates();
+        if (focusId) {
+            Array.prototype.forEach.call(frameList.children, function (row) {
+                if (row.dataset.id !== focusId) return;
+                (focusPlay ? row.querySelector(".play") : row).focus({ preventScroll: true });
             });
-            scaleSelect.value = msg.current;
-            return;
         }
-        if (msg.type !== "score") return;
-        if (msg.live && playing) {
-            swapScore(msg.score);
+        if (any) layoutSliders();
+    }
+
+    function addFrame(button) {
+        button.disabled = true;
+        api.postMessage({ type: "add-frame" });
+    }
+    createFrameBtn.addEventListener("click", function () { addFrame(createFrameBtn); });
+    newFrameBtn.addEventListener("click", function () { addFrame(newFrameBtn); });
+
+    // ---- Settings from the driver
+
+    function applySettings(values) {
+        ["speed", "attack", "volume", "reverb"].forEach(function (key) {
+            if (typeof values[key] === "number") settings[key] = values[key];
+        });
+        if (typeof values.scale === "string") settings.scale = values.scale;
+        if (typeof values.lowOctave === "number" && typeof values.highOctave === "number") {
+            settings.lowOctave = values.lowOctave;
+            settings.highOctave = values.highOctave;
+        }
+        if (values.backing && typeof values.backing === "object") settings.backing = values.backing;
+        if (typeof values.loop === "boolean") setLoop(values.loop);
+        renderScales();
+        renderRange();
+        updateBacking();
+        renderSliders();
+        renderRowStates();
+        if (audio) {
+            var now = audio.ctx.currentTime;
+            audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
+            audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
+        }
+    }
+
+    renderRange();
+    renderSliders();
+
+    function sameFrames(a, b) {
+        return Boolean(a) && Boolean(b) && a.frameIds.join(",") === b.frameIds.join(",");
+    }
+
+    function receiveScore(msg) {
+        var next = msg.score;
+        var same = sameFrames(score, next);
+        if (playing && same) {
+            swapScore(next);
             return;
         }
         if (playing) stop("stopped");
-        score = msg.score;
-        if (scaleSelect.options.length > 0) scaleSelect.value = score.scaleId;
-        showRange(score.lowOctave, score.highOctave);
-        applyKnob(knobs.speed, score.pxPerSecond, false, true);
-        elapsed = 0;
-        playBtn.disabled = score.voices.length === 0;
-        render();
-        describe();
-        api.postMessage({ type: "progress", t: 0 });
-        if (msg.autoplay && audioUnlocked()) start();
+        // A paused frame keeps its place; the playhead stays put in px, so a
+        // speed change rescales the elapsed time.
+        var keep = same && score ? (elapsed * score.pxPerSecond) / next.pxPerSecond : 0;
+        score = next;
+        elapsed = keep > 0 && keep < next.durationSec ? keep : 0;
+        renderRowStates();
+        api.postMessage({ type: "progress", t: elapsed });
+        if (!msg.autoplay) return;
+        var activated = navigator.userActivation ? navigator.userActivation.hasBeenActive : false;
+        if (audioUnlocked() || activated) start();
+        else markAttention(next.frameIds[0]);
+    }
+
+    api.onMessage(function (msg) {
+        if (!msg || typeof msg !== "object") return;
+        switch (msg.type) {
+            case "theme":
+                themeStyle.textContent = ":root{" + msg.css + "}";
+                applyTheme(msg.css);
+                return;
+            case "stop":
+                stop("stopped");
+                return;
+            case "frames":
+                frames = msg.frames;
+                renderFrames();
+                return;
+            case "selection":
+                selectedIds = msg.ids;
+                renderRowStates();
+                return;
+            case "settings":
+                applySettings(msg.values);
+                return;
+            case "seek":
+                seekTo(msg.t);
+                return;
+            case "backing":
+                backingOptions = msg.options;
+                settings.backing = msg.value;
+                renderBacking();
+                return;
+            case "scales":
+                scales = msg.scales;
+                settings.scale = msg.current;
+                renderScales();
+                return;
+            case "score":
+                receiveScore(msg);
+                return;
+        }
     });
 
-    render();
     api.postMessage({ type: "ready" });
 })();
 </script>
 </body>
 </html>`;
 
-// Mozart portrait (assets/serene-icon-256.webp, 128px) embedded so the rail icon ships inside main.js.
-const ACTION_BUTTON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18"><clipPath id="drawdy-serene-rail-clip"><rect width="24" height="24" rx="5"/></clipPath><image href="data:image/webp;base64,UklGRoYJAABXRUJQVlA4IHoJAABwMQCdASqAAIAAPlEijkUjoiMhKBQMKHAKCWMAxBxHPDdTShAS9lv097grzG+dLpxfoAdLBP3Oj8Z+vGh4lB1qOoWanMs2YbQ9sbmeD/56NGeT2UUBPGLL7Tg+nqbymBqZKj0sl1RkbGqP5tvN4uW+Kw0g+huo2KDD0/+YYLA6rb5xNYRIWTSQdcEGjj3dwnUzRhEtUxxd9IWUaUUN5FDtaS8/d7As4RISL7z4vkqZTdBHmhTKbi7b1/Op+WVmJBnInM0kuuYLN1kYR4/+ip6vARSNFQB3AkNAXSA8etr0Ou9bOAKFyAXggSqyG6735C2nvdxUd8ddiDHRYIqgjGiFK6QREK0pKQZq5i1/9ozq6Nr1obLl1TH5QkEJmY8HDc1FoyWxKRHRou5MQwOuyzcc2fuNqeFqgyu1ucPjmPO/KFJQYrDsuYRHT93dzSCYYzOw2LwzEw3hkdHs7UOMP8o5r8jKN4E9LzP2/iI7dRwJ4/O9PhPtpG1T6Uk/rOzXyH7yUKy/XH8lYNhg5ar+4kAuChbyAAD+/AP5dgWKDhlohUi8R8XiJvtt6OLAQyZTCWXdj9vC1YclbbY8g1ODBCT7ST4xl+gd9uv/dZn9DG6FgPCrPtQWl3gPdJddadn0+r8uz472YA0GUJIvoVeSNIE2vUyQCDvkgwQ4Mw4aKEW3lrchjNCv/ZrHrBCEgbfwEfok1ejy9x/ZFYVQwd4x8Xk4V8h6vB09RnzXMR28DgKGoNDG4MZfntRBpdZeZnFYA7SmGgFAMpIE59gzk6m3Ra1hlPM464gwx/BDaahn8e8JIpePvkLthzSAAXZHzairEXNZ1mjNM2RT0PgeqLyRUnhw0piPqT9aa9anVNZgU47nT292m/wsExk9PDR7aCHU2sBf4gSNjoreTHFilIEU8hLXzcexktm94VfXhZ41WmjxMsmN0xOSkcl6/PeGLPZ3xoPM2b7hQVMSseSJ9NilXpwZxEGNOGuxclpyzp4pQ3+XPjI2c6DndIJqoX/vyk3R6pFx9HRDQgGrPuBbQ+8mDvcDA95wvPUWD23dkggtnHG4CKYXNzmJ2q+BmJctC8+jybFTa4ZBLnqnXg1V0iKrFj5PmH7QgiysCnZqH6Ja1VzoRj6RPtgOV8/sEtj3XkKZhnhigIEL/1BeE9kZ3z6MmSPXOTpnQHnFP7L68GIdb+ALYjs6WYb6HajCMZ0UJzzyfq2pnKiu4x561OS+upXryEGaULYNXPhqoCl2W65VnMWu5PBdGpttgbP0gPVpt9p9AmQJvRryaCI3oUtNeBvQEunTZYJY5b1oa//OwP66l4cxUYvxKnAusToW2Lm5ANfXLM1W0JdM40SjRh84pLaNEie+w1NXbRbGBc15rzL7ybeRlJyF3p6Lvdr8jvqozde8A7jbB2OFfFGlQsqTCDeXufSVHHUF4sJwmJhnQcVuibyzAV+MtKUU3sKs3q/Z77qFWFkQrJSzGvzLkbyFpgV2ROkaGcNb4LJvl8TMRw4e+3pylj3KwjVaeCSMNYAZwwrjm5UTqvqACXbplqJbH2rb9UHF1BF1CW0syXqhLODufi+8WpmVv98Xop75oOI4BYNutqvBUpDKN9CvpkHoaL7xzeU0UjTK6vGwfre1GkVvh90Ly6mIkc+NIZqBWeetHLrI5qt37sHiPNjZce4aA1EgiRDXZBulzXSkcomf+43WhTEXiPsXIO4qvA3uEC/BwzOKA5yM3+NYX7vm5pHrpAUCd5XoqPbwSsb2K6fUjywavzOSRmqvqcfWLSjof+T5klSG03P1oEJ9xa3/w2FBpFHgLJTVNwNE4dsxEKsFui1iLLWUGuMzEfBf/UAdSgasxsmpj1QqqIejUOMB4pJgzs0hSWoBZ/L2Kc7WuVNU7IjQ7D9XAzo4upoEnj+v2VwuvUzIMDSY6Y4H1pJ34Lnn8GNcMjgYMRi7aQPP24i34/CNXCwC9MOoVdbF/15UaqhBvyfddJ3KcRTMQtzfqN1telx+28vpIwvA9/AGOwKbxh6uobduQ0duLzCF3u+pbMv0qKfJWeEZf+zDToUNY3Sdd2hrfOKdx0FeWsWpCehpQrmicdU7ZwlHOHYjEjOhtrSNGrk723v/w5zDyHplAr+JR/OF+G89OB4EtHIUw46Fg1pn3ZX2zFjhW9bDS4/gJ7hbD2KnXW1zu2eXR+a24cZvvxHbLv3L9rKBeJTLR1M+8h6xi4/K80+e+1T/AtJ5qti+gOCreQNqQ3LMKc3qbWRSCBSwJxSo2/73WYHaj0OFWpG6gtHERYdJa0MiMowFYf/fqgZlKp8Qj4DbivmMVBhsGqK3KgVdzXPG528fN2iL+4aVLTUgjoun9wx5TbGDQmWaLTbdZigSp0o7HiwxBUsHtefVGJhSkTfoX5MBOsYwmy02Id9wyytN5hhku7RIsulgwJhTq+TLY/l5j/33eomn/0x/2vVtfpNE1GIEr5/cCMH97jYGK5mKDslGUpcDnis9lLJNTqCrnPQ36/9fWlJM/6R3xYya5CEmD1cxwrUDpZ1Ic2WBuMTf0wHxEzQEoNSiHc3Q0CivF8cYAgEdL+2c5U2CLm5u9Jvxwo9Cj/G1+GXdTll1q1BmQe8QWLhOuqbJZOStnVk6vI7uBBk8LzqI3FtMG1jIXq5wiv3D+MY+1k0p4Gf3231UHYM+b+UJXeuJD+hicxzgK8WaNe1m7CIkSKIzQlyeL8I68BktOZQl7dn15aKo/B9j61C98Au3xnxkQ1utFsPbJd5CYj9tOef3eP375+CH5fsluiqO21wuTVAE+v4GaTWGNJjj2yX6LBRdOj0Y4He7vEq+/2uGns5TqSQJ1vgy51uDSaicJw43ZQAliWTZwSdLGsPBjMhka5WSTJq1nO1fckeBk7Ba13gOsfovlHP+1Vv/X/Dc3W/kqYrWrPcjaWn9/8txMb+bwnVOjvlEl5I1QSC6CAyUciwtgUX6V5xaaXk39N5R0/4utTIWnTb1V4jhyTAkzq0aH82mQLO4H1OVEs/j8Cc30itf47rX955gV15sIvaGo/ZQ7eKSHYHbhH/sXitmIHvkpuvTj6kt0OpfYEOVSUDHCYDvhdnlxq3x2FZqOOnOkhe9TU5ASsOqi6gYcLZ+q1EfLkIoY2RlS2PguOIFhCdtWwndY0Rl4ORSM5Jo43EtiHgL2IVgpbjXqRDROx61MW1/gXGksS6WYrd0bhbIMNfDyikzrEoZNO5z69zouwkQPEAAAA==" x="0" y="0" width="24" height="24" clip-path="url(#drawdy-serene-rail-clip)"/></svg>`;
+// assets/serene-icon-256.webp at 128px, embedded so the icon ships inside main.js.
+const ICON_DATA_URI = "data:image/webp;base64,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";
+const ACTION_BUTTON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18"><clipPath id="drawdy-serene-rail-clip"><rect width="24" height="24" rx="5"/></clipPath><image href="${ICON_DATA_URI}" x="0" y="0" width="24" height="24" clip-path="url(#drawdy-serene-rail-clip)"/></svg>`;
 const actionButtonId = (driverId) => `${driverId}:action-button`;
 const panelWebviewId = (driverId) => `${driverId}:webview`;
 function stylingCssVars(styling) {
@@ -1803,7 +2525,7 @@ const serializeVoice = (score) => (voice) => ({
         row: pitch.row,
     })),
 });
-function serializeScore(score, elementCount) {
+function serializeScore(score, elementCount, frameIds) {
     return {
         durationSec: score.durationSec,
         pxPerSecond: score.pxPerSecond,
@@ -1811,10 +2533,10 @@ function serializeScore(score, elementCount) {
         rectHeight: score.rect.height,
         elementCount,
         scaleId: score.scale.id,
-        scaleName: score.scale.name,
         lowOctave: score.range.lowOctave,
         highOctave: score.range.highOctave,
         voices: score.voices.map(serializeVoice(score)),
+        frameIds,
     };
 }
 async function openPanel(ctx, styling) {
@@ -1823,13 +2545,21 @@ async function openPanel(ctx, styling) {
         ...stamp(ctx),
         req: {
             webviewDomId: panelWebviewId(ctx.driverId),
-            htmlContent: PANEL_HTML.replace("/*__DRAWDY_STYLING__*/", stylingCssVars(styling)),
+            htmlContent: PANEL_HTML.replace("/*__DRAWDY_STYLING__*/", stylingCssVars(styling)).replace("__SERENE_ICON__", ICON_DATA_URI),
             keepStateWhenClosed: true,
         },
     });
 }
-const progressionNames = (scaleId) => progressionsFor(scaleId).map((progression) => progression.name);
-const scaleOptions = () => SCALES.map((scale) => ({ id: scale.id, name: scale.name }));
+const backingOptions = () => PROGRESSIONS.map((progression) => ({
+    name: progression.label,
+    progression: progression.name,
+}));
+const scaleOptions = () => SCALES.map((scale) => ({
+    id: scale.id,
+    name: scale.name,
+    description: scale.description,
+    steps: scale.steps,
+}));
 function postToPanel(ctx, message) {
     void ctx.issueCommand({
         type: "command:webview:post-message",
@@ -2157,8 +2887,10 @@ function laserInk(strokes) {
     }));
 }
 
+/** Sweep rate at Speed 1.0x: a 960 px frame lasts 4.8 s. */
+const BASE_PX_PER_SECOND = 200;
 const DEFAULT_SCORE_OPTIONS = {
-    pxPerSecond: 220,
+    pxPerSecond: BASE_PX_PER_SECOND,
     stepsPerSecond: 8,
     maxVoices: 5,
     scale: DEFAULT_SCALE_ID,
@@ -2175,7 +2907,7 @@ const MAX_SEGMENT_SAMPLES = 4096;
 const MAX_PITCH_POINTS = 256;
 const FULL_VELOCITY_HITS = 8;
 const MIN_VELOCITY = 0.42;
-function clampSpeed(pxPerSecond) {
+function clampSpeed$1(pxPerSecond) {
     if (!isFinite(pxPerSecond))
         return DEFAULT_SCORE_OPTIONS.pxPerSecond;
     return Math.max(MIN_PX_PER_SECOND, Math.min(MAX_PX_PER_SECOND, pxPerSecond));
@@ -2397,7 +3129,7 @@ function buildScore(rect, ink, options = {}) {
     const { pxPerSecond, stepsPerSecond, maxVoices, scale, lowOctave, highOctave, backing, } = { ...DEFAULT_SCORE_OPTIONS, ...options };
     const resolved = getScale(scale);
     const range = normalizeRange(lowOctave, highOctave);
-    const speed = clampSpeed(pxPerSecond);
+    const speed = clampSpeed$1(pxPerSecond);
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
     const durationSec = Math.max(MIN_DURATION_SEC, Math.min(MAX_DURATION_SEC, width / speed));
@@ -2442,20 +3174,14 @@ function playheadX(score, elapsedSec) {
 const SERENE_META_KEY = "serene";
 const FRAME_WIDTH = 960;
 const FRAME_HEIGHT = 600;
-const FRAME_GAP = 80;
-const SEARCH_RINGS = 6;
-const FLY_MS = 600;
-const FLY_MAX_ZOOM = 1;
+const FRAME_GAP = 120;
+const FLY_MS = 380;
+const FLY_MAX_ZOOM = 0.8;
+// Room around the frame so the frame bar above it stays in view.
+const FLY_PADDING = 80;
 const FRAME_PROPERTIES = [
     "type",
     "meta",
-    "x",
-    "y",
-    "width",
-    "height",
-];
-const BOUNDS_PROPERTIES = [
-    "type",
     "x",
     "y",
     "width",
@@ -2467,7 +3193,29 @@ function isSereneFrame(el) {
     const marker = el.meta?.[SERENE_META_KEY];
     return marker === true || (typeof marker === "object" && marker !== null);
 }
-function sereneFrameSchema(id, origin) {
+/**
+ * Drivers cannot read or set a Drawdy frame's own name, so a Serene frame
+ * keeps its name in its meta. Frames made before names existed have none.
+ */
+function storedFrameName(el) {
+    const marker = el.meta?.[SERENE_META_KEY];
+    if (typeof marker !== "object" || marker === null)
+        return null;
+    const name = marker.name;
+    return typeof name === "string" && name.trim() !== "" ? name : null;
+}
+function frameNames(frames) {
+    return frames.map((frame, index) => storedFrameName(frame) ?? `Serene ${index + 1}`);
+}
+/** "Serene {n}": the first unused number, starting at frame count + 1. */
+function nextFrameName(frames) {
+    const taken = new Set(frameNames(frames));
+    let n = frames.length + 1;
+    while (taken.has(`Serene ${n}`))
+        n++;
+    return `Serene ${n}`;
+}
+function sereneFrameSchema(id, origin, name) {
     return {
         type: "frame",
         drawdyElementId: id,
@@ -2475,14 +3223,8 @@ function sereneFrameSchema(id, origin) {
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
         rotation: 0,
-        meta: { [SERENE_META_KEY]: true },
+        meta: { [SERENE_META_KEY]: { name } },
     };
-}
-function overlaps(a, b) {
-    return (a.x < b.x + b.width &&
-        a.x + a.width > b.x &&
-        a.y < b.y + b.height &&
-        a.y + a.height > b.y);
 }
 function pad(rect, amount) {
     return {
@@ -2490,38 +3232,6 @@ function pad(rect, amount) {
         y: rect.y - amount,
         width: rect.width + amount * 2,
         height: rect.height + amount * 2,
-    };
-}
-function findFreeSpot(center, size, occupied, gap) {
-    const stepX = (size.width + gap) / 2;
-    const stepY = (size.height + gap) / 2;
-    const candidates = [];
-    for (let i = -SEARCH_RINGS; i <= SEARCH_RINGS; i++) {
-        for (let j = -SEARCH_RINGS; j <= SEARCH_RINGS; j++) {
-            const dx = i * stepX;
-            const dy = j * stepY;
-            candidates.push({
-                rect: {
-                    x: center.x + dx - size.width / 2,
-                    y: center.y + dy - size.height / 2,
-                    width: size.width,
-                    height: size.height,
-                },
-                distance: Math.hypot(dx, dy),
-            });
-        }
-    }
-    candidates.sort((a, b) => a.distance - b.distance);
-    const free = candidates.find(({ rect }) => !occupied.some((taken) => overlaps(pad(rect, gap), taken)));
-    if (free)
-        return free.rect;
-    const union = combineRects(occupied);
-    const rightEdge = union ? union.x + union.width : center.x;
-    return {
-        x: rightEdge + gap,
-        y: center.y - size.height / 2,
-        width: size.width,
-        height: size.height,
     };
 }
 async function framesWith(ctx, drawdyElementIds) {
@@ -2540,57 +3250,74 @@ async function sereneFramesAmong(ctx, ids) {
         return [];
     return framesWith(ctx, ids);
 }
-async function occupiedAround(ctx, center) {
-    const reachX = FRAME_WIDTH * (SEARCH_RINGS + 1);
-    const reachY = FRAME_HEIGHT * (SEARCH_RINGS + 1);
-    const { drawdyElements } = unwrap(await ctx.issueCommand({
-        type: "command:scene:query-rect",
-        ...stamp(ctx),
-        req: {
-            rect: {
-                x: center.x - reachX,
-                y: center.y - reachY,
-                width: reachX * 2,
-                height: reachY * 2,
-            },
-            properties: BOUNDS_PROPERTIES,
-        },
-    }));
-    return drawdyElements
-        .map(elementBounds)
-        .filter((r) => r !== null);
-}
-async function addSereneFrame(ctx) {
-    const { rect: viewport } = unwrap(await ctx.issueCommand({
+async function viewportCenter(ctx) {
+    const { rect } = unwrap(await ctx.issueCommand({
         type: "command:camera:get-viewport-rect",
         ...stamp(ctx),
     }));
-    const center = {
-        x: viewport.x + viewport.width / 2,
-        y: viewport.y + viewport.height / 2,
-    };
-    const occupied = await occupiedAround(ctx, center);
-    const spot = findFreeSpot(center, { width: FRAME_WIDTH, height: FRAME_HEIGHT }, occupied, FRAME_GAP);
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+/** Right of the rightmost Serene frame, level with it; centered in view when there is none. */
+async function nextFrameOrigin(ctx, frames) {
+    let rightmost = null;
+    for (const frame of frames) {
+        const bounds = elementBounds(frame);
+        if (!bounds)
+            continue;
+        if (!rightmost || bounds.x + bounds.width > rightmost.x + rightmost.width) {
+            rightmost = bounds;
+        }
+    }
+    if (rightmost) {
+        return { x: rightmost.x + rightmost.width + FRAME_GAP, y: rightmost.y };
+    }
+    const center = await viewportCenter(ctx);
+    return { x: center.x - FRAME_WIDTH / 2, y: center.y - FRAME_HEIGHT / 2 };
+}
+async function flyToFrame(ctx, rect) {
+    unwrap(await ctx.issueCommand({
+        type: "command:camera:fly-to-rect",
+        ...stamp(ctx),
+        req: {
+            rect: pad(rect, FLY_PADDING),
+            flyDurationMs: FLY_MS,
+            zoom: FLY_MAX_ZOOM,
+        },
+    }));
+}
+async function selectAndFlyTo(ctx, id) {
+    const [frame] = await sereneFramesAmong(ctx, [id]);
+    const bounds = frame ? elementBounds(frame) : null;
+    if (!bounds)
+        return;
+    unwrap(await ctx.issueCommand({
+        type: "command:scene:set-selection",
+        ...stamp(ctx),
+        req: { drawdyElementIds: [id] },
+    }));
+    await flyToFrame(ctx, bounds);
+}
+async function addSereneFrame(ctx) {
+    const frames = await listSereneFrames(ctx);
+    const origin = await nextFrameOrigin(ctx, frames);
     const id = ctx.generateId();
     unwrap(await ctx.issueCommand({
         type: "command:scene:add-drawdy-elements",
         ...stamp(ctx),
-        req: { elements: [sereneFrameSchema(id, spot)] },
+        req: {
+            elements: [sereneFrameSchema(id, origin, nextFrameName(frames))],
+        },
     }));
     unwrap(await ctx.issueCommand({
         type: "command:scene:set-selection",
         ...stamp(ctx),
         req: { drawdyElementIds: [id] },
     }));
-    unwrap(await ctx.issueCommand({
-        type: "command:camera:fly-to-rect",
-        ...stamp(ctx),
-        req: {
-            rect: pad(spot, FRAME_GAP),
-            flyDurationMs: FLY_MS,
-            zoom: FLY_MAX_ZOOM,
-        },
-    }));
+    await flyToFrame(ctx, {
+        ...origin,
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+    });
     return id;
 }
 
@@ -2682,52 +3409,109 @@ async function resolveTarget(ctx, explicit = []) {
     return { rect: region.rect, frameIds: region.stageIds, elements };
 }
 
+// Thumbnails are drawn in a viewBox this wide, height following the frame.
+const THUMB_WIDTH = 160;
+const MAX_THUMB_STROKES = 60;
+const MAX_THUMB_POINTS = 48;
+const THUMB_PROPERTIES = [...INK_PROPERTIES, "strokeColor"];
+// Only plain color syntax reaches the panel's markup.
+const SAFE_COLOR = /^(#[0-9a-f]{3,8}|(rgba?|hsla?|oklch|oklab|lab|lch)\([\d\s.,%/-]+\)|[a-z]+)$/i;
+function thumbPath(points, rect, scale) {
+    const picked = points.length > MAX_THUMB_POINTS ? evenPick(points, MAX_THUMB_POINTS) : points;
+    return picked
+        .map(([x, y], index) => {
+        const tx = ((x - rect.x) * scale).toFixed(1);
+        const ty = ((y - rect.y) * scale).toFixed(1);
+        return `${index === 0 ? "M" : "L"}${tx} ${ty}`;
+    })
+        .join("");
+}
+async function thumbStrokes(ctx, frameId, rect) {
+    const { drawdyElements } = unwrap(await ctx.issueCommand({
+        type: "command:scene:query-rect",
+        ...stamp(ctx),
+        req: { rect, properties: THUMB_PROPERTIES },
+    }));
+    const elements = dropStageElements(drawdyElements.filter((el) => el.type !== "frame"), [frameId]);
+    const scale = THUMB_WIDTH / Math.max(1, rect.width);
+    const strokes = [];
+    for (const el of elements) {
+        const color = typeof el.strokeColor === "string" && SAFE_COLOR.test(el.strokeColor)
+            ? el.strokeColor
+            : null;
+        for (const { points } of elementInk(el)) {
+            strokes.push({ d: thumbPath(points, rect, scale), color });
+        }
+    }
+    return strokes.length > MAX_THUMB_STROKES
+        ? evenPick(strokes, MAX_THUMB_STROKES)
+        : strokes;
+}
+async function frameSummaries(ctx) {
+    const frames = await listSereneFrames(ctx);
+    const names = frameNames(frames);
+    const summaries = await Promise.all(frames.map(async (frame, index) => {
+        const rect = elementBounds(frame);
+        if (!rect || rect.width <= 0 || rect.height <= 0)
+            return null;
+        return {
+            id: frame.id,
+            name: names[index],
+            width: rect.width,
+            height: rect.height,
+            strokes: await thumbStrokes(ctx, frame.id, rect),
+        };
+    }));
+    return summaries.filter((s) => s !== null);
+}
+
 const SETTINGS_KEY = "settings";
+const MIN_SPEED = 0.5;
+const MAX_SPEED = 2;
+const SPEED_STEP = 0.05;
 const DEFAULT_BACKING = {
     enabled: false,
     progression: 0,
-    voicing: "full",
-    rhythm: 1,
 };
 const DEFAULT_SETTINGS = {
-    speed: DEFAULT_SCORE_OPTIONS.pxPerSecond,
+    speed: 1,
     scale: DEFAULT_SCALE_ID,
     loop: false,
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
-    notes: 0.8,
-    backingLevel: 0.7,
-    reverb: 0.38,
+    volume: 0.7,
+    reverb: 0.3,
     backing: DEFAULT_BACKING,
 };
-const VOICINGS = ["bass", "omit3", "full"];
-const RHYTHMS = [1, 2, 4, ...ARP_PATTERNS];
-function sanitizeBacking(raw, scale, current = DEFAULT_BACKING) {
+function speedToPxPerSecond(speed) {
+    return BASE_PX_PER_SECOND * speed;
+}
+function clampSpeed(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        return DEFAULT_SETTINGS.speed;
+    }
+    // Before 1.5 speed was stored in px per second (40 to 900).
+    const multiplier = value > MAX_SPEED * 4 ? value / BASE_PX_PER_SECOND : value;
+    const clamped = Math.min(MAX_SPEED, Math.max(MIN_SPEED, multiplier));
+    return Number((Math.round(clamped / SPEED_STEP) * SPEED_STEP).toFixed(2));
+}
+function sanitizeBacking(raw, current = DEFAULT_BACKING) {
     if (typeof raw !== "object" || raw === null)
         return current;
     const record = raw;
-    const count = progressionsFor(scale).length;
+    const last = PROGRESSIONS.length - 1;
     const progression = typeof record.progression === "number" && Number.isFinite(record.progression)
-        ? Math.min(count - 1, Math.max(0, Math.floor(record.progression)))
-        : Math.min(count - 1, current.progression);
-    const voicing = VOICINGS.includes(record.voicing)
-        ? record.voicing
-        : current.voicing;
-    const rhythm = RHYTHMS.includes(record.rhythm)
-        ? record.rhythm
-        : current.rhythm;
+        ? Math.min(last, Math.max(0, Math.floor(record.progression)))
+        : Math.min(last, current.progression);
     return {
         enabled: typeof record.enabled === "boolean" ? record.enabled : current.enabled,
         progression,
-        voicing,
-        rhythm,
     };
 }
 const KNOB_RANGES = {
-    attack: [0, 0.3],
-    notes: [0, 1],
-    backingLevel: [0, 1],
+    attack: [0, 1],
+    volume: [0, 1],
     reverb: [0, 1],
 };
 function clampNumber(value, min, max, fallback) {
@@ -2745,16 +3529,13 @@ function sanitizeKnobs(raw, current) {
 }
 function sanitizeSettings(raw) {
     const scale = typeof raw.scale === "string" ? getScale(raw.scale).id : DEFAULT_SETTINGS.scale;
-    const speed = typeof raw.speed === "number" && Number.isFinite(raw.speed)
-        ? clampSpeed(raw.speed)
-        : DEFAULT_SETTINGS.speed;
     return {
         ...sanitizeKnobs(raw, DEFAULT_SETTINGS),
-        speed,
+        speed: clampSpeed(raw.speed),
         scale,
         loop: raw.loop === true,
         ...normalizeRange(raw.lowOctave, raw.highOctave),
-        backing: sanitizeBacking(raw.backing, scale),
+        backing: sanitizeBacking(raw.backing),
     };
 }
 async function loadSettings(ctx) {
@@ -2785,6 +3566,7 @@ function saveSettings(ctx, settings) {
 
 const EMPTY_REGION = { x: 0, y: 0, width: 1, height: 1 };
 const REFRESH_DEBOUNCE_MS = 120;
+const FRAME_LIST_DEBOUNCE_MS = 250;
 function sameRect(a, b) {
     return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
@@ -2803,6 +3585,9 @@ class SereneSession {
     _frameIds = [];
     _playing = false;
     _refreshTimer = null;
+    _frameListTimer = null;
+    _panelOpened = false;
+    _selection = [];
     constructor(_ctx, _playhead, _transport, _styling) {
         this._ctx = _ctx;
         this._playhead = _playhead;
@@ -2825,17 +3610,13 @@ class SereneSession {
         this._transport.setStyling(styling);
     }
     async openPanel() {
+        this._panelOpened = true;
         await openPanel(this._ctx, this._styling);
     }
     async openFromRail() {
         await this.openPanel();
         this.postTheme();
-        const frames = await listSereneFrames(this._ctx);
-        if (frames.length === 0) {
-            await this.addFrame();
-            return;
-        }
-        this.postFrames(frames.length);
+        await this.postFrames();
     }
     async addFrame() {
         try {
@@ -2845,14 +3626,33 @@ class SereneSession {
             await this.postFrames();
         }
     }
-    async postFrames(count) {
-        const total = count ?? (await listSereneFrames(this._ctx)).length;
-        postToPanel(this._ctx, { type: "frames", count: total });
+    async postFrames() {
+        if (!this._panelOpened)
+            return;
+        const frames = await frameSummaries(this._ctx);
+        postToPanel(this._ctx, { type: "frames", frames });
+    }
+    /** Thumbnails follow the board; coalesce bursts of scene changes. */
+    scheduleFrames() {
+        if (!this._panelOpened)
+            return;
+        if (this._frameListTimer)
+            clearTimeout(this._frameListTimer);
+        this._frameListTimer = setTimeout(() => {
+            this._frameListTimer = null;
+            void this.postFrames().catch(() => undefined);
+        }, FRAME_LIST_DEBOUNCE_MS);
+    }
+    setSelection(ids) {
+        this._selection = ids;
+        if (!this._panelOpened)
+            return;
+        postToPanel(this._ctx, { type: "selection", ids });
     }
     postBacking() {
         postToPanel(this._ctx, {
             type: "backing",
-            progressions: progressionNames(this._settings.scale),
+            options: backingOptions(),
             value: this._settings.backing,
         });
     }
@@ -2959,6 +3759,7 @@ class SereneSession {
                 this.postScales();
                 this.postBacking();
                 void this.postFrames();
+                postToPanel(this._ctx, { type: "selection", ids: this._selection });
                 if (this._score) {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
@@ -2980,6 +3781,11 @@ class SereneSession {
                         : 0);
                 }
                 return;
+            case "paused":
+                // The playhead holds where it stopped; the bar offers Play again.
+                this._playing = false;
+                this._transport.setPlaying(null);
+                return;
             case "ended":
             case "stopped":
                 this._playing = false;
@@ -2989,6 +3795,12 @@ class SereneSession {
                 return;
             case "add-frame":
                 await this.addFrame();
+                return;
+            case "focus-frame":
+                await selectAndFlyTo(this._ctx, message.id);
+                return;
+            case "play-frame":
+                await this.play([message.id]);
                 return;
             case "range":
                 this._updateSettings(normalizeRange(message.low, message.high, this._settings));
@@ -3012,11 +3824,7 @@ class SereneSession {
                 return;
             case "scale": {
                 const scale = getScale(message.value).id;
-                this._updateSettings({
-                    scale,
-                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
-                });
-                this.postBacking();
+                this._updateSettings({ scale });
                 if (!this._rect)
                     return;
                 this._rebuild();
@@ -3025,7 +3833,7 @@ class SereneSession {
             }
             case "backing":
                 this._updateSettings({
-                    backing: sanitizeBacking(message.value, this._settings.scale, this._settings.backing),
+                    backing: sanitizeBacking(message.value, this._settings.backing),
                 });
                 if (!this._rect)
                     return;
@@ -3038,11 +3846,13 @@ class SereneSession {
         if (!this._rect)
             return;
         this._score = buildScore(this._rect, [...this._lines, ...this._laser], {
-            pxPerSecond: this._settings.speed,
+            pxPerSecond: speedToPxPerSecond(this._settings.speed),
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
-            backing: this._settings.backing.enabled ? this._settings.backing : null,
+            backing: this._settings.backing.enabled
+                ? { progression: this._settings.backing.progression, voicing: "full", rhythm: 1 }
+                : null,
         });
     }
     _postScore(autoplay, live = false) {
@@ -3052,7 +3862,7 @@ class SereneSession {
             this._pendingAutoplay = true;
         postToPanel(this._ctx, {
             type: "score",
-            score: serializeScore(this._score, this._elementCount),
+            score: serializeScore(this._score, this._elementCount, this._frameIds),
             autoplay,
             live,
         });
@@ -3520,7 +4330,9 @@ async function syncTransportWithSelection(ctx, transport) {
         type: "command:scene:get-current-selected-drawdy-elements",
         ...stamp(ctx),
     }));
-    transport.setSelection(drawdyElementIds.filter((id) => !transport.ownIds.includes(id)));
+    const foreign = drawdyElementIds.filter((id) => !transport.ownIds.includes(id));
+    transport.setSelection(foreign);
+    driver?.session.setSelection(foreign);
 }
 const onEvent = async (event) => {
     if (!driver)
@@ -3539,6 +4351,7 @@ const onEvent = async (event) => {
             if (foreign.length === 0 && ids.length > 0)
                 return;
             transport.setSelection(foreign);
+            session.setSelection(foreign);
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
@@ -3559,9 +4372,7 @@ const onEvent = async (event) => {
                     ? event.body.replaced
                     : []),
             ];
-            if (event.type !== "subscription:scene:elements-updated" && changed.some(isSereneFrame)) {
-                await session.postFrames();
-            }
+            session.scheduleFrames();
             transport.refreshIfAffected(changed.map((el) => el.id));
             session.onSceneChanged(changed);
             return;

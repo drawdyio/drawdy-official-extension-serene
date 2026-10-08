@@ -2,16 +2,17 @@
 
 Play your drawing.
 
-Open Serene from the extension rail and it drops a **Serene frame** onto the
-board (or offers to add another). Draw inside it, select it, and press the
-play button that appears above the frame. A playhead sweeps left to right
+Open Serene from the extension rail. On a board with no Serene frame the panel
+offers **Create Serene frame**; after that, **New frame** in the panel's Frames
+list adds another. Draw inside a frame and press its play button, in the
+Frames list or above the selected frame. A playhead sweeps left to right
 across the frame at a constant rate — a wider region
 takes proportionally longer — and every stroke it crosses rings out as a sine
 tone with a short, tunable attack, then decaying into a long reverb tail.
 
-Pitch comes from height: by default the bottom of the region is **C4** and the
-top is **C7**, and the panel's **Range** row lets you move either end anywhere
-from C1 to C8. Everything between snaps to a rung of the chosen scale, so nothing lands on
+Pitch comes from height: by default the bottom of the region is **C3** and the
+top is **C6**, and the panel's **Range** keyboard lets you drag either end to
+any C from C1 to C8, at least an octave apart. Everything between snaps to a rung of the chosen scale, so nothing lands on
 an interval you did not ask for no matter what you drew.
 
 ## Scales
@@ -19,14 +20,16 @@ an interval you did not ask for no matter what you drew.
 Pick one in the panel. Every scale spans the same octave range, so switching
 changes the colour and the number of rungs, never the range.
 
-| Scale | Degrees | Rows (C4 to C7) |
+| Scale | Degrees | Rows (C3 to C6) |
 | --- | --- | --- |
-| C major pentatonic (default) | C D E G A | 16 |
-| C major | C D E F G A B | 22 |
-| C dorian | C D E&#9837; F G A B&#9837; | 22 |
-| C lydian | C D E F&#9839; G A B | 22 |
-| C mixolydian | C D E F G A B&#9837; | 22 |
-| Japanese hirajoshi | C D E&#9837; G A&#9837; | 16 |
+| Major pentatonic (default) | C D E G A | 16 |
+| Major | C D E F G A B | 22 |
+| Dorian | C D E&#9837; F G A B&#9837; | 22 |
+| Lydian | C D E F&#9839; G A B | 22 |
+| Mixolydian | C D E F G A B&#9837; | 22 |
+| Minor pentatonic | C E&#9837; F G B&#9837; | 16 |
+| Phrygian | C D&#9837; E&#9837; F G A&#9837; B&#9837; | 22 |
+| Hirajoshi | C D E&#9837; G A&#9837; | 16 |
 
 A seven-note scale gives the playhead more rungs to cross in the same height,
 so the same drawing has finer pitch resolution and more steps in a slide.
@@ -36,9 +39,12 @@ so the same drawing has finer pitch resolution and more steps in a slide.
 Only a Serene frame plays. It is an ordinary Drawdy frame tagged with
 `meta.serene = true`, so you can move, resize, duplicate and delete it like any
 other frame. The first time you open the panel with no Serene frame on the
-board, one is added for you at the nearest empty spot around the camera and
-the camera flies to it. After that, the panel's **Add another Serene frame**
-button does the same.
+board, the panel shows **Create Serene frame**, which adds "Serene 1" centered
+in view. **New frame** adds "Serene {n}" 120 px to the right of the rightmost
+Serene frame, level with it. Either way the frame is selected and the camera
+fits it. Drivers cannot read or set a Drawdy frame's own name, so the Serene
+name lives in `meta.serene.name`; frames from before names existed are listed
+as "Serene {position}".
 
 When exactly one Serene frame is selected, a transport bar floats above its top
 edge: a round play button on the left and a seek track spanning the frame's
@@ -100,26 +106,14 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 
 ## Backing track
 
-The panel's **Backing** card adds a chord progression under the drawing, played
-by a soft triangle pad (or plucks when a chord is struck more than once). Pick a
-progression for the current scale, a voicing — bass only, bass plus root and
-fifth with the third omitted, or the full triad — and a rhythm. Balance it
-against the drawing with the **Notes** and **Backing** knobs in the rack. Rhythm is 1, 2 or 4 strikes per chord (a single sustained chord is held
-for 85% of its slot so chords breathe), or an arpeggio over a sustained bass. **Up** runs 1 3 5 1' 3' 5 3 1 through the
-triad and its octave, **Down** is the mirror image starting from the top, and
-either pattern plays twice per chord in double time. Arpeggio notes are plain
-sines struck with a near-instant attack. The bass sits around C2 and the chord
-tones in the C3 octave regardless of the melodic range.
-
-Progressions are built diatonically from the scale, so chord qualities follow
-the mode: in C major **I vi IV V**, **I iii IV V**, **I V**, **I IV** or **I**;
-in dorian **i III IV**, **i IV** or **i III/6 IV/6** (first inversions whose
-bass walks down from the tonic: C, G below, A); in mixolydian **I v** or
-**I vii**, where the vii bass steps down to the B♭ below the tonic rather than
-up; in lydian **I II V**, **I II I II**, **I II**, **I V** or **I** (the four-chord
-**I II I II** is the two-chord one at double time). The major pentatonic borrows the
-major progressions, harmonised from the full major scale; hirajoshi holds a
-single **I**.
+The panel's **Backing** control adds a chord progression under the drawing,
+played by a soft triangle pad as full triads: **Pop** (I vi IV V), **Classic**
+(I iii IV V), **Simple** (I V) or **Drone** (I). The same four are offered in
+every scale and built diatonically from it, so chord qualities follow the
+mode: Pop in dorian is i vi&deg; IV v. Five-note scales borrow the seven-note
+scale that contains them for harmony: major pentatonic uses major, minor
+pentatonic and hirajoshi use natural minor. The bass sits around C2 and the
+chord tones in the C3 octave regardless of the melodic range.
 
 The backing is locked to the sweep. A frame up to about 1000 px wide plays the
 progression once across its duration; every further 1000 px adds another pass
@@ -129,15 +123,25 @@ the score, they follow speed changes, seeks and loops exactly like the ink.
 
 ## Panel
 
-The extension rail opens a transport panel with play/stop, a speed slider
-(px per second — this is what sets the duration), attack (0 to 300 ms, default
-20 ms — how long each voice takes to reach full level), a **Notes** level for
-the drawn voices, a **Backing** level that appears only while a progression is
-selected, and reverb, a **Loop** toggle that wraps the sweep back to the start without cutting
-any tails, and
-an **Add Serene frame** button with a count of the frames on the board. Every
-knob and the scale are remembered across sessions in the driver's key/value
-storage, which is why the manifest asks for the `storage` permission.
+The panel holds the settings shared by every Serene frame, and the frames
+themselves:
+
+- **Scale**, with a one-line description of each.
+- **Range**, a C1 to C8 keyboard with a handle at each end. Handles snap to C,
+  stay an octave apart and play their note as they snap; clicking a key moves
+  the nearer handle there. Arrow keys move a focused handle an octave.
+- **Backing**: Off, Pop, Classic, Simple, Drone.
+- **Feel** (collapsed by default, with a summary): **Speed** 0.5&times; to
+  2.0&times; on a 200 px per second sweep, so a 960 px frame lasts 4.8 s at
+  1.0&times;; **Attack** 0 to 1000 ms; **Volume**, the output level; **Reverb**.
+  Double-click a slider to reset it.
+- **Frames**: a row per Serene frame with a thumbnail of its strokes, its
+  duration at the current Speed and a play/pause button. Clicking a row selects
+  the frame and fits the camera to it.
+
+Every setting is remembered in the driver's key/value storage, which is why
+the manifest asks for the `storage` permission. Settings saved before 1.5 are
+migrated: a speed in px per second becomes the nearest multiplier.
 
 Dry and reverb sum into a mix bus that runs through a limiter before the volume
 control: a dense passage stacks five voices per column on top of the tails of
@@ -156,8 +160,9 @@ clipped samples unlimited, and 0.796 with none through the limiter.
 
 Audio lives in the panel's webview, which runs in a sandboxed opaque-origin
 iframe. Browsers require one real click inside that frame before a page may
-make sound, so the first play has to come from the panel's ▶ button. After
-that, the on-canvas play button starts playback on its own.
+make sound, so the first play has to come from a play button in the panel's
+Frames list (it pulses when a play from the board was blocked). After that,
+the on-canvas play button starts playback on its own.
 
 ## Develop
 

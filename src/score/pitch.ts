@@ -4,25 +4,67 @@ export type ScaleId =
     | "dorian"
     | "lydian"
     | "mixolydian"
+    | "minor-pentatonic"
+    | "phrygian"
     | "japanese";
 
 export type Scale = {
     id: ScaleId;
     name: string;
+    description: string;
     steps: number[];
 };
 
 export const SCALES: Scale[] = [
     {
         id: "major-pentatonic",
-        name: "C major pentatonic",
+        name: "Major pentatonic",
+        description: "Bright",
         steps: [0, 2, 4, 7, 9],
     },
-    { id: "major", name: "C major", steps: [0, 2, 4, 5, 7, 9, 11] },
-    { id: "dorian", name: "C dorian", steps: [0, 2, 3, 5, 7, 9, 10] },
-    { id: "lydian", name: "C lydian", steps: [0, 2, 4, 6, 7, 9, 11] },
-    { id: "mixolydian", name: "C mixolydian", steps: [0, 2, 4, 5, 7, 9, 10] },
-    { id: "japanese", name: "Japanese hirajoshi", steps: [0, 2, 3, 7, 8] },
+    {
+        id: "major",
+        name: "Major",
+        description: "Happy and familiar",
+        steps: [0, 2, 4, 5, 7, 9, 11],
+    },
+    {
+        id: "dorian",
+        name: "Dorian",
+        description: "Cool and a little jazzy",
+        steps: [0, 2, 3, 5, 7, 9, 10],
+    },
+    {
+        id: "lydian",
+        name: "Lydian",
+        description: "Dreamy and floating",
+        steps: [0, 2, 4, 6, 7, 9, 11],
+    },
+    {
+        id: "mixolydian",
+        name: "Mixolydian",
+        description: "Bluesy and relaxed",
+        steps: [0, 2, 4, 5, 7, 9, 10],
+    },
+    {
+        id: "minor-pentatonic",
+        name: "Minor pentatonic",
+        description: "Moody",
+        steps: [0, 3, 5, 7, 10],
+    },
+    {
+        id: "phrygian",
+        name: "Phrygian",
+        description: "Dark and mysterious",
+        steps: [0, 1, 3, 5, 7, 8, 10],
+    },
+    {
+        // Kept as "japanese" so settings saved before the rename still load.
+        id: "japanese",
+        name: "Hirajoshi",
+        description: "Calm and Japanese-inspired",
+        steps: [0, 2, 3, 7, 8],
+    },
 ];
 
 export const DEFAULT_SCALE_ID: ScaleId = "major-pentatonic";
@@ -31,7 +73,7 @@ export type PitchRange = { lowOctave: number; highOctave: number };
 
 export const MIN_OCTAVE = 1;
 export const MAX_OCTAVE = 8;
-export const DEFAULT_RANGE: PitchRange = { lowOctave: 4, highOctave: 7 };
+export const DEFAULT_RANGE: PitchRange = { lowOctave: 3, highOctave: 6 };
 
 export function normalizeRange(
     lowOctave: unknown,

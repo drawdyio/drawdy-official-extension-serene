@@ -3,17 +3,18 @@ import {
     SubscribeableKey,
     SubscribedDrawdyElement,
 } from "@drawdy/driver-protocol";
-import { Rect, combineRects } from "../score/geometry";
+import { Rect } from "../score/geometry";
 import { elementBounds } from "../score/ink";
 import { Ctx, stamp, unwrap } from "./context";
 
 export const SERENE_META_KEY = "serene";
 export const FRAME_WIDTH = 960;
 export const FRAME_HEIGHT = 600;
-export const FRAME_GAP = 80;
-const SEARCH_RINGS = 6;
-const FLY_MS = 600;
-const FLY_MAX_ZOOM = 1;
+export const FRAME_GAP = 120;
+const FLY_MS = 380;
+const FLY_MAX_ZOOM = 0.8;
+// Room around the frame so the frame bar above it stays in view.
+const FLY_PADDING = 80;
 
 export const FRAME_PROPERTIES: SubscribeableKey[] = [
     "type",
@@ -24,16 +25,7 @@ export const FRAME_PROPERTIES: SubscribeableKey[] = [
     "height",
 ];
 
-const BOUNDS_PROPERTIES: SubscribeableKey[] = [
-    "type",
-    "x",
-    "y",
-    "width",
-    "height",
-];
-
 type Point = { x: number; y: number };
-type Size = { width: number; height: number };
 
 export function isSereneFrame(el: SubscribedDrawdyElement): boolean {
     if (el.type !== "frame") return false;
@@ -41,9 +33,35 @@ export function isSereneFrame(el: SubscribedDrawdyElement): boolean {
     return marker === true || (typeof marker === "object" && marker !== null);
 }
 
+/**
+ * Drivers cannot read or set a Drawdy frame's own name, so a Serene frame
+ * keeps its name in its meta. Frames made before names existed have none.
+ */
+export function storedFrameName(el: SubscribedDrawdyElement): string | null {
+    const marker = el.meta?.[SERENE_META_KEY];
+    if (typeof marker !== "object" || marker === null) return null;
+    const name = (marker as Record<string, unknown>).name;
+    return typeof name === "string" && name.trim() !== "" ? name : null;
+}
+
+export function frameNames(frames: SubscribedDrawdyElement[]): string[] {
+    return frames.map(
+        (frame, index) => storedFrameName(frame) ?? `Serene ${index + 1}`
+    );
+}
+
+/** "Serene {n}": the first unused number, starting at frame count + 1. */
+export function nextFrameName(frames: SubscribedDrawdyElement[]): string {
+    const taken = new Set(frameNames(frames));
+    let n = frames.length + 1;
+    while (taken.has(`Serene ${n}`)) n++;
+    return `Serene ${n}`;
+}
+
 export function sereneFrameSchema(
     id: string,
-    origin: Point
+    origin: Point,
+    name: string
 ): DrawdyElementSchema {
     return {
         type: "frame",
@@ -52,17 +70,8 @@ export function sereneFrameSchema(
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
         rotation: 0,
-        meta: { [SERENE_META_KEY]: true },
+        meta: { [SERENE_META_KEY]: { name } },
     };
-}
-
-function overlaps(a: Rect, b: Rect): boolean {
-    return (
-        a.x < b.x + b.width &&
-        a.x + a.width > b.x &&
-        a.y < b.y + b.height &&
-        a.y + a.height > b.y
-    );
 }
 
 function pad(rect: Rect, amount: number): Rect {
@@ -71,46 +80,6 @@ function pad(rect: Rect, amount: number): Rect {
         y: rect.y - amount,
         width: rect.width + amount * 2,
         height: rect.height + amount * 2,
-    };
-}
-
-export function findFreeSpot(
-    center: Point,
-    size: Size,
-    occupied: Rect[],
-    gap: number
-): Rect {
-    const stepX = (size.width + gap) / 2;
-    const stepY = (size.height + gap) / 2;
-    const candidates: { rect: Rect; distance: number }[] = [];
-    for (let i = -SEARCH_RINGS; i <= SEARCH_RINGS; i++) {
-        for (let j = -SEARCH_RINGS; j <= SEARCH_RINGS; j++) {
-            const dx = i * stepX;
-            const dy = j * stepY;
-            candidates.push({
-                rect: {
-                    x: center.x + dx - size.width / 2,
-                    y: center.y + dy - size.height / 2,
-                    width: size.width,
-                    height: size.height,
-                },
-                distance: Math.hypot(dx, dy),
-            });
-        }
-    }
-    candidates.sort((a, b) => a.distance - b.distance);
-    const free = candidates.find(
-        ({ rect }) => !occupied.some((taken) => overlaps(pad(rect, gap), taken))
-    );
-    if (free) return free.rect;
-
-    const union = combineRects(occupied);
-    const rightEdge = union ? union.x + union.width : center.x;
-    return {
-        x: rightEdge + gap,
-        y: center.y - size.height / 2,
-        width: size.width,
-        height: size.height,
     };
 }
 
@@ -142,53 +111,75 @@ export async function sereneFramesAmong(
     return framesWith(ctx, ids);
 }
 
-async function occupiedAround(ctx: Ctx, center: Point): Promise<Rect[]> {
-    const reachX = FRAME_WIDTH * (SEARCH_RINGS + 1);
-    const reachY = FRAME_HEIGHT * (SEARCH_RINGS + 1);
-    const { drawdyElements } = unwrap(
-        await ctx.issueCommand({
-            type: "command:scene:query-rect",
-            ...stamp(ctx),
-            req: {
-                rect: {
-                    x: center.x - reachX,
-                    y: center.y - reachY,
-                    width: reachX * 2,
-                    height: reachY * 2,
-                },
-                properties: BOUNDS_PROPERTIES,
-            },
-        })
-    );
-    return drawdyElements
-        .map(elementBounds)
-        .filter((r): r is Rect => r !== null);
-}
-
-export async function addSereneFrame(ctx: Ctx): Promise<string> {
-    const { rect: viewport } = unwrap(
+async function viewportCenter(ctx: Ctx): Promise<Point> {
+    const { rect } = unwrap(
         await ctx.issueCommand({
             type: "command:camera:get-viewport-rect",
             ...stamp(ctx),
         })
     );
-    const center = {
-        x: viewport.x + viewport.width / 2,
-        y: viewport.y + viewport.height / 2,
-    };
-    const occupied = await occupiedAround(ctx, center);
-    const spot = findFreeSpot(
-        center,
-        { width: FRAME_WIDTH, height: FRAME_HEIGHT },
-        occupied,
-        FRAME_GAP
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+/** Right of the rightmost Serene frame, level with it; centered in view when there is none. */
+async function nextFrameOrigin(
+    ctx: Ctx,
+    frames: SubscribedDrawdyElement[]
+): Promise<Point> {
+    let rightmost: Rect | null = null;
+    for (const frame of frames) {
+        const bounds = elementBounds(frame);
+        if (!bounds) continue;
+        if (!rightmost || bounds.x + bounds.width > rightmost.x + rightmost.width) {
+            rightmost = bounds;
+        }
+    }
+    if (rightmost) {
+        return { x: rightmost.x + rightmost.width + FRAME_GAP, y: rightmost.y };
+    }
+    const center = await viewportCenter(ctx);
+    return { x: center.x - FRAME_WIDTH / 2, y: center.y - FRAME_HEIGHT / 2 };
+}
+
+export async function flyToFrame(ctx: Ctx, rect: Rect): Promise<void> {
+    unwrap(
+        await ctx.issueCommand({
+            type: "command:camera:fly-to-rect",
+            ...stamp(ctx),
+            req: {
+                rect: pad(rect, FLY_PADDING),
+                flyDurationMs: FLY_MS,
+                zoom: FLY_MAX_ZOOM,
+            },
+        })
     );
+}
+
+export async function selectAndFlyTo(ctx: Ctx, id: string): Promise<void> {
+    const [frame] = await sereneFramesAmong(ctx, [id]);
+    const bounds = frame ? elementBounds(frame) : null;
+    if (!bounds) return;
+    unwrap(
+        await ctx.issueCommand({
+            type: "command:scene:set-selection",
+            ...stamp(ctx),
+            req: { drawdyElementIds: [id] },
+        })
+    );
+    await flyToFrame(ctx, bounds);
+}
+
+export async function addSereneFrame(ctx: Ctx): Promise<string> {
+    const frames = await listSereneFrames(ctx);
+    const origin = await nextFrameOrigin(ctx, frames);
     const id = ctx.generateId();
     unwrap(
         await ctx.issueCommand({
             type: "command:scene:add-drawdy-elements",
             ...stamp(ctx),
-            req: { elements: [sereneFrameSchema(id, spot)] },
+            req: {
+                elements: [sereneFrameSchema(id, origin, nextFrameName(frames))],
+            },
         })
     );
     unwrap(
@@ -198,16 +189,10 @@ export async function addSereneFrame(ctx: Ctx): Promise<string> {
             req: { drawdyElementIds: [id] },
         })
     );
-    unwrap(
-        await ctx.issueCommand({
-            type: "command:camera:fly-to-rect",
-            ...stamp(ctx),
-            req: {
-                rect: pad(spot, FRAME_GAP),
-                flyDurationMs: FLY_MS,
-                zoom: FLY_MAX_ZOOM,
-            },
-        })
-    );
+    await flyToFrame(ctx, {
+        ...origin,
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+    });
     return id;
 }

@@ -17,7 +17,7 @@ export type BackingOptions = {
 };
 
 export type ChordSpec = { degree: number; inversion: number };
-export type Progression = { name: string; chords: ChordSpec[] };
+export type Progression = { name: string; label: string; chords: ChordSpec[] };
 
 const BASS_OCTAVE_MIDI = 36;
 const CHORD_OCTAVE_MIDI = 48;
@@ -66,46 +66,38 @@ function chord(symbol: string): ChordSpec {
     return { degree, inversion: suffix === "6" ? 1 : 0 };
 }
 
-function progression(symbols: string): Progression {
+function progression(label: string, symbols: string): Progression {
     return {
         name: symbols,
+        label,
         chords: symbols.split(" ").map(chord),
     };
 }
 
-const MAJOR_PROGRESSIONS: Progression[] = [
-    progression("I vi IV V"),
-    progression("I iii IV V"),
-    progression("I V"),
-    progression("I IV"),
-    progression("I"),
+/**
+ * The same four backings in every scale. Chord qualities follow the mode
+ * because the triads are built diatonically from the harmony scale.
+ */
+export const PROGRESSIONS: Progression[] = [
+    progression("Pop", "I vi IV V"),
+    progression("Classic", "I iii IV V"),
+    progression("Simple", "I V"),
+    progression("Drone", "I"),
 ];
 
-const PROGRESSIONS: Record<ScaleId, Progression[]> = {
-    major: MAJOR_PROGRESSIONS,
-    dorian: [
-        progression("i III IV"),
-        progression("i IV"),
-        progression("i III/6 IV/6"),
-    ],
-    mixolydian: [progression("I v"), progression("I vii")],
-    lydian: [
-        progression("I II V"),
-        progression("I II I II"),
-        progression("I II"),
-        progression("I V"),
-        progression("I"),
-    ],
-    "major-pentatonic": MAJOR_PROGRESSIONS,
-    japanese: [progression("I")],
-};
+const AEOLIAN_STEPS = [0, 2, 3, 5, 7, 8, 10];
 
+/** Five-note scales borrow the seven-note scale that contains them. */
 export function harmonyScale(scale: Scale): Scale {
-    return scale.id === "major-pentatonic" ? getScale("major") : scale;
+    if (scale.id === "major-pentatonic") return getScale("major");
+    if (scale.id === "minor-pentatonic" || scale.id === "japanese") {
+        return { ...scale, steps: AEOLIAN_STEPS };
+    }
+    return scale;
 }
 
-export function progressionsFor(scaleId: ScaleId): Progression[] {
-    return PROGRESSIONS[scaleId];
+export function progressionsFor(_scaleId: ScaleId): Progression[] {
+    return PROGRESSIONS;
 }
 
 export function pickProgression(scaleId: ScaleId, index: number): Progression {
