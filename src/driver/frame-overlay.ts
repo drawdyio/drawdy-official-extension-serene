@@ -130,7 +130,8 @@ export class FrameOverlay {
     private _active: Active | null = null;
     private _rangePreview: string | null = null;
     private _rangeTimer: ReturnType<typeof setTimeout> | null = null;
-    private _dragging = false;
+    /** Frames being moved on the board; their overlay is stale until the drop. */
+    private _dragging = new Set<string>();
     /** Dragging a playhead: shown where the pointer is, applied on release. */
     private _scrub: { frameId: string; progress: number } | null = null;
     private _shield: Rect | null = null;
@@ -238,8 +239,15 @@ export class FrameOverlay {
         this._request();
     }
 
-    public setDragging(dragging: boolean): void {
-        this._dragging = dragging;
+    /**
+     * Hides the overlay of frames that are actually moving. A press alone (a
+     * drag start without movement) changes nothing, so a click on a selected
+     * frame's bar, which Drawdy also treats as the start of a move, still lands.
+     */
+    public setDragging(ids: readonly string[]): void {
+        const next = new Set(ids.filter((id) => this._frames.some((f) => f.id === id)));
+        if (next.size === this._dragging.size && [...next].every((id) => this._dragging.has(id))) return;
+        this._dragging = next;
         this._request();
     }
 
@@ -397,7 +405,7 @@ export class FrameOverlay {
     }
 
     private async _sync(): Promise<void> {
-        const frames = this._dragging ? [] : this._frames;
+        const frames = this._frames.filter((frame) => !this._dragging.has(frame.id));
         const guides: DrawdyPreviewElementSchema[] = [];
         const labels: DrawdyPreviewElementSchema[] = [];
         const playheads: DrawdyPreviewElementSchema[] = [];
@@ -702,11 +710,11 @@ export class FrameOverlay {
                 k,
                 {
                     type: "row",
-                    // Click selects the frame; double-click renames it in the panel.
+                    // Click opens the panel on the frame; double-click renames it there.
                     domId: this._clickable(`serene-bar-${frame.id}`),
                     styles: {
                         pointerEvents: "auto",
-                        cursor: "default",
+                        cursor: "pointer",
                         padding: [8, "px"],
                         gap: 8,
                         crossAxisAlignment: "center",
@@ -714,6 +722,12 @@ export class FrameOverlay {
                         borderColor: s.border,
                         borderWidth: [1, "px"],
                         borderRadius: [10, "px"],
+                        // Interaction/Hover over the bar, kept opaque so the board
+                        // never shows through.
+                        hover: {
+                            backgroundColor: `color-mix(in srgb, ${s.foreground} 6%, ${s.background})`,
+                            borderColor: `color-mix(in srgb, ${s.foreground} 16%, ${s.background})`,
+                        },
                     },
                     children,
                 }

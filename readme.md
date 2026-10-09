@@ -54,7 +54,9 @@ before that flag existed get it (and their name) the first time Serene lists
 them; a Drawdy build without support for the flag still draws its chip under
 the bar.
 
-Clicking the bar selects its frame; double-clicking it opens the panel with
+Clicking the bar selects its frame and opens the Serene panel, where the frame
+is highlighted in the Frames list and its play button is outlined in lime
+until you click in the panel or select another frame; double-clicking it opens the panel with
 that frame's name ready to edit in the Frames list, where a double-click on a
 row's name (or F2 on a focused row) does the same. Enter or clicking away
 saves, Esc cancels, and an empty name is ignored.
@@ -138,10 +140,10 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 The panel's **Backing** tabs add a chord progression under the drawing, played
 by a soft triangle pad (or plucks when a chord is struck more than once). Pick a
 style, then a **Voicing** (Bass: bass only; No
-3rd: bass plus root and fifth; Full: the full triad) and a **Rhythm**, which
-appear under it while a backing is on. Balance it against the drawing with the
+3rd: bass plus root and fifth; Full: the full triad) and a **Rhythm**, shown
+under it. Balance it against the drawing with the
 **Notes** and **Backing** sliders under Feel. Rhythm is 1×, 2× or 4× strikes per chord (a single sustained chord is held
-for 85% of its slot so chords breathe), or an arpeggio over a sustained bass (Voicing is hidden then). **Arp ↑** runs 1 3 5 1' 3' 5 3 1 through the
+for 85% of its slot so chords breathe), or an arpeggio over a sustained bass (Voicing is greyed out then). **Arp ↑** runs 1 3 5 1' 3' 5 3 1 through the
 triad and its octave, **Arp ↓** is the mirror image starting from the top, and
 either pattern plays twice per chord in double time. Arpeggio notes are plain
 sines struck with a near-instant attack. The bass sits around C2 and the chord
@@ -173,26 +175,26 @@ the score, they follow speed changes, seeks and loops exactly like the ink.
 
 ## Panel
 
-The panel holds the settings shared by every Serene frame, and the frames
-themselves:
+The panel lists the frames first, then the settings shared by every Serene
+frame:
 
+- **Frames**: a row per Serene frame with a thumbnail of its strokes, its
+  duration at the current Speed and a play/pause button. Clicking a row selects
+  the frame and fits the camera to it.
 - **Scale**, with a one-line description of each; resting on an option plays
   a short preview of it.
 - **Range**, a C1 to C8 keyboard with a handle at each end. Handles snap to C,
   stay an octave apart and play their note as they snap; clicking a key moves
   the nearer handle there. Arrow keys move a focused handle an octave.
 - **Backing**: Off, Pop, Classic, Simple or Drone, each the current scale's
-  own progression, with **Voicing** and **Rhythm** under it while a backing is
-  on (see Backing track). Resting on a style plays one pass of it in the
+  own progression, with **Voicing** and **Rhythm** under it (see Backing
+  track). Resting on a style plays one pass of it in the
   current scale, voicing and rhythm.
 - **Feel** (collapsed by default, with a summary): **Speed** 0.5&times; to
   2.0&times; on a 220 px per second sweep, so a 960 px frame lasts about 4.4 s
   at 1.0&times;; **Attack** 0 to 300 ms; **Notes**, the level of the drawn
   voices; **Backing**, the level of the backing (only while one is on);
   **Reverb**. Double-click a slider to reset it.
-- **Frames**: a row per Serene frame with a thumbnail of its strokes, its
-  duration at the current Speed and a play/pause button. Clicking a row selects
-  the frame and fits the camera to it.
 
 Every setting is remembered in the driver's key/value storage, which is why
 the manifest asks for the `storage` permission. Settings saved before 1.4.1

@@ -74,13 +74,17 @@ main {
     /* The scrollbar's room is always reserved and taken out of the right
        padding, so content keeps its width whether or not the panel scrolls. */
     padding-right: var(--scroll-pad, 16px);
+    /* Less below the last section, so the default view (one frame, Feel
+       closed) fits without a scrollbar for a few pixels of overflow. */
+    padding-bottom: 8px;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: var(--mark) transparent;
 }
-.view { display: flex; flex-direction: column; gap: 12px; }
+/* Tight enough that the Feel header shows at the bottom of the panel with one frame listed. */
+.view { display: flex; flex-direction: column; gap: 10px; }
 .label { color: var(--fg-2); }
-.field { display: flex; flex-direction: column; gap: 8px; position: relative; }
+.field { display: flex; flex-direction: column; gap: 6px; position: relative; }
 .field-head { display: flex; align-items: center; justify-content: space-between; }
 .field-value { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .divider { border: 0; height: 1px; margin: 0; background: var(--divider); }
@@ -249,7 +253,7 @@ main {
 .handle.dragging .grip::after { background: var(--pressed); }
 .handle:focus-visible { outline: none; }
 .handle:focus-visible .grip { outline: 2px solid var(--ring); outline-offset: 1px; }
-.piano-labels { position: relative; height: 16px; margin-top: 6px; color: var(--fg-3); }
+.piano-labels { position: relative; height: 16px; margin-top: 4px; color: var(--fg-3); }
 .key-label {
     position: absolute;
     top: 0;
@@ -489,6 +493,8 @@ button.section-head { cursor: pointer; }
 .icon-btn[aria-pressed="true"]:hover { background: linear-gradient(var(--hover), var(--hover)), var(--layer); }
 .icon-btn:disabled { color: var(--fg-disabled); cursor: default; background: var(--surface); }
 .icon-btn.attention { animation: attention 1.4s ease-in-out infinite; }
+/* The frame whose title was clicked on the board. */
+.icon-btn.spotlight { outline: 2px solid #c5f601; outline-offset: 1px; }
 @keyframes attention {
     0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
     50% { box-shadow: 0 0 0 5px var(--accent-subtle); }
@@ -546,6 +552,18 @@ button.section-head { cursor: pointer; }
 <body>
 <main>
 <div class="view" id="full" hidden>
+    <section class="frames">
+        <div class="section-head">
+            <span class="section-title">Frames</span>
+            <button type="button" class="text-action" id="new-frame">
+                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg>New frame
+            </button>
+        </div>
+        <ul class="frame-list" id="frame-list"></ul>
+    </section>
+
+    <hr class="divider" />
+
     <div class="field" id="scale-field">
         <span class="label" id="scale-label">Scale</span>
         <button type="button" class="select-trigger" id="scale-trigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="scale-label scale-value">
@@ -576,12 +594,12 @@ button.section-head { cursor: pointer; }
         <div class="segmented" id="backing" role="radiogroup" aria-labelledby="backing-label"></div>
     </div>
 
-    <div class="field" id="voicing-field" hidden>
+    <div class="field" id="voicing-field">
         <span class="label" id="voicing-label">Voicing</span>
         <div class="segmented" id="voicing" role="radiogroup" aria-labelledby="voicing-label"></div>
     </div>
 
-    <div class="field" id="rhythm-field" hidden>
+    <div class="field" id="rhythm-field">
         <span class="label" id="rhythm-label">Rhythm</span>
         <div class="segmented" id="rhythm" role="radiogroup" aria-labelledby="rhythm-label"></div>
     </div>
@@ -599,17 +617,6 @@ button.section-head { cursor: pointer; }
         </div>
     </section>
 
-    <hr class="divider" />
-
-    <section class="frames">
-        <div class="section-head">
-            <span class="section-title">Frames</span>
-            <button type="button" class="text-action" id="new-frame">
-                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg>New frame
-            </button>
-        </div>
-        <ul class="frame-list" id="frame-list"></ul>
-    </section>
 
 </div>
 
@@ -1782,7 +1789,7 @@ button.section-head { cursor: pointer; }
         }
         event.preventDefault();
         chooseBacking(buttons[next].dataset.value);
-        buttons[next].focus();
+        buttons[next].focus({ preventScroll: true });
         var item = backingItems().filter(function (i) { return i.value === buttons[next].dataset.value; })[0];
         if (item) showTip(buttons[next], item.tip);
     });
@@ -1817,7 +1824,7 @@ button.section-head { cursor: pointer; }
             }
             event.preventDefault();
             choose(items[next].value);
-            buttons[next].focus();
+            buttons[next].focus({ preventScroll: true });
             showTip(buttons[next], items[next].tip);
         });
         return {
@@ -1856,18 +1863,18 @@ button.section-head { cursor: pointer; }
         function (value) { if (value !== settings.backing.rhythm) setBacking({ rhythm: value }); }
     );
 
-    var voicingField = document.getElementById("voicing-field");
-    var rhythmField = document.getElementById("rhythm-field");
 
-    // Voicing and Rhythm only matter with a backing on; arpeggios set their own voicing.
+    // Voicing and Rhythm always show; arpeggios set their own voicing, so
+    // Voicing is greyed out while one is chosen.
     function renderBackingRows() {
         updateBackingTabs();
-        var on = settings.backing.enabled;
-        rhythmField.hidden = !on;
-        voicingField.hidden = !on || isArp(settings.backing.rhythm);
         voicingControl.render();
         rhythmControl.render();
-        showBackingLevel(on);
+        var arp = isArp(settings.backing.rhythm);
+        Array.prototype.forEach.call(document.getElementById("voicing").children, function (button) {
+            button.disabled = arp;
+        });
+        showBackingLevel(settings.backing.enabled);
     }
 
     // ---- Feel
@@ -2295,7 +2302,7 @@ button.section-head { cursor: pointer; }
         }
         pendingRenameId = null;
         if (editing && editing.id === id) {
-            editing.input.focus();
+            editing.input.focus({ preventScroll: true });
             return;
         }
         if (editing) editing.finish(true);
@@ -2343,8 +2350,43 @@ button.section-head { cursor: pointer; }
         input.addEventListener("dblclick", function (event) { event.stopPropagation(); });
         input.focus({ preventScroll: true });
         if (draft === undefined) input.select();
-        row.scrollIntoView({ block: "nearest" });
+        revealInPanel(row);
     }
+
+    /**
+     * Scrolls the panel just enough to show "el". Never scrollIntoView: it also
+     * scrolls every container around the panel, Drawdy's whole page included.
+     */
+    function revealInPanel(el) {
+        var main = document.querySelector("main");
+        var view = main.getBoundingClientRect();
+        var box = el.getBoundingClientRect();
+        var margin = 8;
+        if (box.top < view.top + margin) {
+            main.scrollTop -= view.top + margin - box.top;
+        } else if (box.bottom > view.bottom - margin) {
+            main.scrollTop += box.bottom - (view.bottom - margin);
+        }
+    }
+
+    // Opened from a frame's title on the board: outline that frame's play button
+    // until the user does something else in the panel.
+    var spotlightId = null;
+
+    function spotlightFrame(id) {
+        spotlightId = id;
+        renderRowStates();
+        var row = rowById(id);
+        if (row) revealInPanel(row);
+    }
+
+    function clearSpotlight() {
+        if (spotlightId === null) return;
+        spotlightId = null;
+        renderRowStates();
+    }
+
+    document.addEventListener("pointerdown", clearSpotlight, true);
 
     function playFrame(id) {
         if (isPlayingFrame(id)) {
@@ -2378,6 +2420,7 @@ button.section-head { cursor: pointer; }
             play.setAttribute("aria-label", (on ? "Pause " : "Play ") + frame.name);
             play.setAttribute("aria-pressed", on ? "true" : "false");
             play.classList.toggle("attention", attentionId === id && !on);
+            play.classList.toggle("spotlight", spotlightId === id);
         });
     }
 
@@ -2404,6 +2447,10 @@ button.section-head { cursor: pointer; }
                 if (row.dataset.id !== focusId) return;
                 (focusPlay ? row.querySelector(".play") : row).focus({ preventScroll: true });
             });
+        }
+        if (spotlightId !== null && !focusId) {
+            var spotRow = rowById(spotlightId);
+            if (spotRow) revealInPanel(spotRow);
         }
         if (draft) startRename(draft.id, draft.value);
         else if (pendingRenameId) startRename(pendingRenameId);
@@ -2486,8 +2533,12 @@ button.section-head { cursor: pointer; }
             case "edit-frame-name":
                 startRename(msg.id);
                 return;
+            case "spotlight-frame":
+                spotlightFrame(msg.id);
+                return;
             case "selection":
                 selectedIds = msg.ids;
+                if (spotlightId !== null && selectedIds.indexOf(spotlightId) < 0) spotlightId = null;
                 renderRowStates();
                 return;
             case "settings":

@@ -763,13 +763,17 @@ main {
     /* The scrollbar's room is always reserved and taken out of the right
        padding, so content keeps its width whether or not the panel scrolls. */
     padding-right: var(--scroll-pad, 16px);
+    /* Less below the last section, so the default view (one frame, Feel
+       closed) fits without a scrollbar for a few pixels of overflow. */
+    padding-bottom: 8px;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: var(--mark) transparent;
 }
-.view { display: flex; flex-direction: column; gap: 12px; }
+/* Tight enough that the Feel header shows at the bottom of the panel with one frame listed. */
+.view { display: flex; flex-direction: column; gap: 10px; }
 .label { color: var(--fg-2); }
-.field { display: flex; flex-direction: column; gap: 8px; position: relative; }
+.field { display: flex; flex-direction: column; gap: 6px; position: relative; }
 .field-head { display: flex; align-items: center; justify-content: space-between; }
 .field-value { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .divider { border: 0; height: 1px; margin: 0; background: var(--divider); }
@@ -938,7 +942,7 @@ main {
 .handle.dragging .grip::after { background: var(--pressed); }
 .handle:focus-visible { outline: none; }
 .handle:focus-visible .grip { outline: 2px solid var(--ring); outline-offset: 1px; }
-.piano-labels { position: relative; height: 16px; margin-top: 6px; color: var(--fg-3); }
+.piano-labels { position: relative; height: 16px; margin-top: 4px; color: var(--fg-3); }
 .key-label {
     position: absolute;
     top: 0;
@@ -1178,6 +1182,8 @@ button.section-head { cursor: pointer; }
 .icon-btn[aria-pressed="true"]:hover { background: linear-gradient(var(--hover), var(--hover)), var(--layer); }
 .icon-btn:disabled { color: var(--fg-disabled); cursor: default; background: var(--surface); }
 .icon-btn.attention { animation: attention 1.4s ease-in-out infinite; }
+/* The frame whose title was clicked on the board. */
+.icon-btn.spotlight { outline: 2px solid #c5f601; outline-offset: 1px; }
 @keyframes attention {
     0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
     50% { box-shadow: 0 0 0 5px var(--accent-subtle); }
@@ -1235,6 +1241,18 @@ button.section-head { cursor: pointer; }
 <body>
 <main>
 <div class="view" id="full" hidden>
+    <section class="frames">
+        <div class="section-head">
+            <span class="section-title">Frames</span>
+            <button type="button" class="text-action" id="new-frame">
+                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg>New frame
+            </button>
+        </div>
+        <ul class="frame-list" id="frame-list"></ul>
+    </section>
+
+    <hr class="divider" />
+
     <div class="field" id="scale-field">
         <span class="label" id="scale-label">Scale</span>
         <button type="button" class="select-trigger" id="scale-trigger" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="scale-label scale-value">
@@ -1265,12 +1283,12 @@ button.section-head { cursor: pointer; }
         <div class="segmented" id="backing" role="radiogroup" aria-labelledby="backing-label"></div>
     </div>
 
-    <div class="field" id="voicing-field" hidden>
+    <div class="field" id="voicing-field">
         <span class="label" id="voicing-label">Voicing</span>
         <div class="segmented" id="voicing" role="radiogroup" aria-labelledby="voicing-label"></div>
     </div>
 
-    <div class="field" id="rhythm-field" hidden>
+    <div class="field" id="rhythm-field">
         <span class="label" id="rhythm-label">Rhythm</span>
         <div class="segmented" id="rhythm" role="radiogroup" aria-labelledby="rhythm-label"></div>
     </div>
@@ -1288,17 +1306,6 @@ button.section-head { cursor: pointer; }
         </div>
     </section>
 
-    <hr class="divider" />
-
-    <section class="frames">
-        <div class="section-head">
-            <span class="section-title">Frames</span>
-            <button type="button" class="text-action" id="new-frame">
-                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg>New frame
-            </button>
-        </div>
-        <ul class="frame-list" id="frame-list"></ul>
-    </section>
 
 </div>
 
@@ -2471,7 +2478,7 @@ button.section-head { cursor: pointer; }
         }
         event.preventDefault();
         chooseBacking(buttons[next].dataset.value);
-        buttons[next].focus();
+        buttons[next].focus({ preventScroll: true });
         var item = backingItems().filter(function (i) { return i.value === buttons[next].dataset.value; })[0];
         if (item) showTip(buttons[next], item.tip);
     });
@@ -2506,7 +2513,7 @@ button.section-head { cursor: pointer; }
             }
             event.preventDefault();
             choose(items[next].value);
-            buttons[next].focus();
+            buttons[next].focus({ preventScroll: true });
             showTip(buttons[next], items[next].tip);
         });
         return {
@@ -2545,18 +2552,18 @@ button.section-head { cursor: pointer; }
         function (value) { if (value !== settings.backing.rhythm) setBacking({ rhythm: value }); }
     );
 
-    var voicingField = document.getElementById("voicing-field");
-    var rhythmField = document.getElementById("rhythm-field");
 
-    // Voicing and Rhythm only matter with a backing on; arpeggios set their own voicing.
+    // Voicing and Rhythm always show; arpeggios set their own voicing, so
+    // Voicing is greyed out while one is chosen.
     function renderBackingRows() {
         updateBackingTabs();
-        var on = settings.backing.enabled;
-        rhythmField.hidden = !on;
-        voicingField.hidden = !on || isArp(settings.backing.rhythm);
         voicingControl.render();
         rhythmControl.render();
-        showBackingLevel(on);
+        var arp = isArp(settings.backing.rhythm);
+        Array.prototype.forEach.call(document.getElementById("voicing").children, function (button) {
+            button.disabled = arp;
+        });
+        showBackingLevel(settings.backing.enabled);
     }
 
     // ---- Feel
@@ -2984,7 +2991,7 @@ button.section-head { cursor: pointer; }
         }
         pendingRenameId = null;
         if (editing && editing.id === id) {
-            editing.input.focus();
+            editing.input.focus({ preventScroll: true });
             return;
         }
         if (editing) editing.finish(true);
@@ -3032,8 +3039,43 @@ button.section-head { cursor: pointer; }
         input.addEventListener("dblclick", function (event) { event.stopPropagation(); });
         input.focus({ preventScroll: true });
         if (draft === undefined) input.select();
-        row.scrollIntoView({ block: "nearest" });
+        revealInPanel(row);
     }
+
+    /**
+     * Scrolls the panel just enough to show "el". Never scrollIntoView: it also
+     * scrolls every container around the panel, Drawdy's whole page included.
+     */
+    function revealInPanel(el) {
+        var main = document.querySelector("main");
+        var view = main.getBoundingClientRect();
+        var box = el.getBoundingClientRect();
+        var margin = 8;
+        if (box.top < view.top + margin) {
+            main.scrollTop -= view.top + margin - box.top;
+        } else if (box.bottom > view.bottom - margin) {
+            main.scrollTop += box.bottom - (view.bottom - margin);
+        }
+    }
+
+    // Opened from a frame's title on the board: outline that frame's play button
+    // until the user does something else in the panel.
+    var spotlightId = null;
+
+    function spotlightFrame(id) {
+        spotlightId = id;
+        renderRowStates();
+        var row = rowById(id);
+        if (row) revealInPanel(row);
+    }
+
+    function clearSpotlight() {
+        if (spotlightId === null) return;
+        spotlightId = null;
+        renderRowStates();
+    }
+
+    document.addEventListener("pointerdown", clearSpotlight, true);
 
     function playFrame(id) {
         if (isPlayingFrame(id)) {
@@ -3067,6 +3109,7 @@ button.section-head { cursor: pointer; }
             play.setAttribute("aria-label", (on ? "Pause " : "Play ") + frame.name);
             play.setAttribute("aria-pressed", on ? "true" : "false");
             play.classList.toggle("attention", attentionId === id && !on);
+            play.classList.toggle("spotlight", spotlightId === id);
         });
     }
 
@@ -3093,6 +3136,10 @@ button.section-head { cursor: pointer; }
                 if (row.dataset.id !== focusId) return;
                 (focusPlay ? row.querySelector(".play") : row).focus({ preventScroll: true });
             });
+        }
+        if (spotlightId !== null && !focusId) {
+            var spotRow = rowById(spotlightId);
+            if (spotRow) revealInPanel(spotRow);
         }
         if (draft) startRename(draft.id, draft.value);
         else if (pendingRenameId) startRename(pendingRenameId);
@@ -3175,8 +3222,12 @@ button.section-head { cursor: pointer; }
             case "edit-frame-name":
                 startRename(msg.id);
                 return;
+            case "spotlight-frame":
+                spotlightFrame(msg.id);
+                return;
             case "selection":
                 selectedIds = msg.ids;
+                if (spotlightId !== null && selectedIds.indexOf(spotlightId) < 0) spotlightId = null;
                 renderRowStates();
                 return;
             case "settings":
@@ -3381,7 +3432,8 @@ class FrameOverlay {
     _active = null;
     _rangePreview = null;
     _rangeTimer = null;
-    _dragging = false;
+    /** Frames being moved on the board; their overlay is stale until the drop. */
+    _dragging = new Set();
     /** Dragging a playhead: shown where the pointer is, applied on release. */
     _scrub = null;
     _shield = null;
@@ -3480,8 +3532,16 @@ class FrameOverlay {
         this._hovered = hovered;
         this._request();
     }
-    setDragging(dragging) {
-        this._dragging = dragging;
+    /**
+     * Hides the overlay of frames that are actually moving. A press alone (a
+     * drag start without movement) changes nothing, so a click on a selected
+     * frame's bar, which Drawdy also treats as the start of a move, still lands.
+     */
+    setDragging(ids) {
+        const next = new Set(ids.filter((id) => this._frames.some((f) => f.id === id)));
+        if (next.size === this._dragging.size && [...next].every((id) => this._dragging.has(id)))
+            return;
+        this._dragging = next;
         this._request();
     }
     setActive(id, playing) {
@@ -3630,7 +3690,7 @@ class FrameOverlay {
         return this._active?.id === frame.id ? this._active.progress : 0;
     }
     async _sync() {
-        const frames = this._dragging ? [] : this._frames;
+        const frames = this._frames.filter((frame) => !this._dragging.has(frame.id));
         const guides = [];
         const labels = [];
         const playheads = [];
@@ -3882,11 +3942,11 @@ class FrameOverlay {
                 y: frame.rect.y - ((BOARD.barGap + BOARD.barHeight) * k) / zoom,
             }, { width: Math.ceil(fit.width / k), height: BOARD.barHeight }, k, {
                 type: "row",
-                // Click selects the frame; double-click renames it in the panel.
+                // Click opens the panel on the frame; double-click renames it there.
                 domId: this._clickable(`serene-bar-${frame.id}`),
                 styles: {
                     pointerEvents: "auto",
-                    cursor: "default",
+                    cursor: "pointer",
                     padding: [8, "px"],
                     gap: 8,
                     crossAxisAlignment: "center",
@@ -3894,6 +3954,12 @@ class FrameOverlay {
                     borderColor: s.border,
                     borderWidth: [1, "px"],
                     borderRadius: [10, "px"],
+                    // Interaction/Hover over the bar, kept opaque so the board
+                    // never shows through.
+                    hover: {
+                        backgroundColor: `color-mix(in srgb, ${s.foreground} 6%, ${s.background})`,
+                        borderColor: `color-mix(in srgb, ${s.foreground} 16%, ${s.background})`,
+                    },
                 },
                 children,
             }),
@@ -4694,6 +4760,7 @@ class SereneSession {
     _panelOpened = false;
     _selection = [];
     _pendingRename = null;
+    _pendingSpotlight = null;
     // A seek made before the panel has loaded; sent again once it is ready.
     _pendingSeek = null;
     constructor(_ctx, _overlay, _styling) {
@@ -4873,8 +4940,13 @@ class SereneSession {
         this._pendingSeek = progress * this._score.durationSec;
         postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
     }
-    async selectFrame(frameId) {
+    async openForFrame(frameId) {
         await selectFrame(this._ctx, frameId);
+        this._pendingSpotlight = frameId;
+        await this.openPanel();
+        this.postTheme();
+        await this.postFrames();
+        postToPanel(this._ctx, { type: "spotlight-frame", id: frameId });
     }
     /** Double-click on a frame bar: rename it in the panel's Frames list. */
     async editFrameName(frameId) {
@@ -4895,6 +4967,10 @@ class SereneSession {
                 this.postBacking();
                 void this.postFrames();
                 postToPanel(this._ctx, { type: "selection", ids: this._selection });
+                if (this._pendingSpotlight) {
+                    postToPanel(this._ctx, { type: "spotlight-frame", id: this._pendingSpotlight });
+                    this._pendingSpotlight = null;
+                }
                 if (this._pendingRename) {
                     postToPanel(this._ctx, { type: "edit-frame-name", id: this._pendingRename });
                     this._pendingRename = null;
@@ -5171,10 +5247,11 @@ const onEvent = async (event) => {
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
-            if (event.body.type === "dragStart")
-                overlay.setDragging(true);
+            // Only real movement hides a frame's overlay; see setDragging.
+            if (event.body.type === "dragging")
+                overlay.setDragging(event.body.drawdyElementIds);
             if (event.body.type === "dragEnd") {
-                overlay.setDragging(false);
+                overlay.setDragging([]);
                 session.scheduleFrames();
             }
             return;
@@ -5211,14 +5288,13 @@ const onEvent = async (event) => {
             const barFrame = overlay.frameForBar(domId);
             if (!barFrame)
                 return;
-            // The host reports single clicks only; two on one bar in quick succession rename.
             const now = Date.now();
             const double = lastBarClick?.frameId === barFrame && now - lastBarClick.at < DOUBLE_CLICK_MS;
             lastBarClick = double ? null : { frameId: barFrame, at: now };
             if (double)
                 await session.editFrameName(barFrame);
             else
-                await session.selectFrame(barFrame);
+                await session.openForFrame(barFrame);
             return;
         }
         case "subscription:webview:message": {

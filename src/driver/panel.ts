@@ -80,6 +80,7 @@ export type DriverToPanel =
     | { type: "frames"; frames: FrameSummary[] }
     | { type: "selection"; ids: string[] }
     | { type: "edit-frame-name"; id: string }
+    | { type: "spotlight-frame"; id: string }
     | { type: "backing-preview"; style: string; notes: PreviewNote[] }
     | { type: "settings"; values: SereneSettings }
     | { type: "seek"; t: number }

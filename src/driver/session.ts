@@ -54,6 +54,7 @@ export class SereneSession {
     private _panelOpened = false;
     private _selection: string[] = [];
     private _pendingRename: string | null = null;
+    private _pendingSpotlight: string | null = null;
     // A seek made before the panel has loaded; sent again once it is ready.
     private _pendingSeek: number | null = null;
 
@@ -246,8 +247,13 @@ export class SereneSession {
         postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
     }
 
-    public async selectFrame(frameId: string): Promise<void> {
+    public async openForFrame(frameId: string): Promise<void> {
         await selectFrame(this._ctx, frameId);
+        this._pendingSpotlight = frameId;
+        await this.openPanel();
+        this.postTheme();
+        await this.postFrames();
+        postToPanel(this._ctx, { type: "spotlight-frame", id: frameId });
     }
 
     /** Double-click on a frame bar: rename it in the panel's Frames list. */
@@ -270,6 +276,10 @@ export class SereneSession {
                 this.postBacking();
                 void this.postFrames();
                 postToPanel(this._ctx, { type: "selection", ids: this._selection });
+                if (this._pendingSpotlight) {
+                    postToPanel(this._ctx, { type: "spotlight-frame", id: this._pendingSpotlight });
+                    this._pendingSpotlight = null;
+                }
                 if (this._pendingRename) {
                     postToPanel(this._ctx, { type: "edit-frame-name", id: this._pendingRename });
                     this._pendingRename = null;

@@ -170,9 +170,10 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
             return;
         }
         case "subscription:scene:drawdy-elements-dragged": {
-            if (event.body.type === "dragStart") overlay.setDragging(true);
+            // Only real movement hides a frame's overlay; see setDragging.
+            if (event.body.type === "dragging") overlay.setDragging(event.body.drawdyElementIds);
             if (event.body.type === "dragEnd") {
-                overlay.setDragging(false);
+                overlay.setDragging([]);
                 session.scheduleFrames();
             }
             return;
@@ -208,13 +209,12 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
             }
             const barFrame = overlay.frameForBar(domId);
             if (!barFrame) return;
-            // The host reports single clicks only; two on one bar in quick succession rename.
             const now = Date.now();
             const double =
                 lastBarClick?.frameId === barFrame && now - lastBarClick.at < DOUBLE_CLICK_MS;
             lastBarClick = double ? null : { frameId: barFrame, at: now };
             if (double) await session.editFrameName(barFrame);
-            else await session.selectFrame(barFrame);
+            else await session.openForFrame(barFrame);
             return;
         }
         case "subscription:webview:message": {
