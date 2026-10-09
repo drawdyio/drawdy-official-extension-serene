@@ -68,6 +68,8 @@ button { font: inherit; color: inherit; }
 main {
     height: 100%;
     overflow-y: auto;
+    /* Never scroll sideways; edge-aligned controls may bleed a pixel or two. */
+    overflow-x: hidden;
     padding: 16px;
     /* The scrollbar's room is always reserved and taken out of the right
        padding, so content keeps its width whether or not the panel scrolls. */
