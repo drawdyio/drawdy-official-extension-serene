@@ -49,8 +49,8 @@ export type ScoreOptions = {
     backing: BackingOptions | null;
 };
 
-/** Sweep rate at Speed 1.0x: a 960 px frame lasts 4.8 s. */
-export const BASE_PX_PER_SECOND = 200;
+/** Sweep rate at Speed 1.0x, the original default rate. */
+export const BASE_PX_PER_SECOND = 220;
 
 export const DEFAULT_SCORE_OPTIONS: ScoreOptions = {
     pxPerSecond: BASE_PX_PER_SECOND,

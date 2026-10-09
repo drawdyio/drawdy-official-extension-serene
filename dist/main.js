@@ -326,7 +326,7 @@ const SCALES = [
     {
         id: "major-pentatonic",
         name: "Major pentatonic",
-        description: "Bright",
+        description: "Bright, no wrong notes",
         steps: [0, 2, 4, 7, 9],
     },
     {
@@ -354,19 +354,6 @@ const SCALES = [
         steps: [0, 2, 4, 5, 7, 9, 10],
     },
     {
-        id: "minor-pentatonic",
-        name: "Minor pentatonic",
-        description: "Moody",
-        steps: [0, 3, 5, 7, 10],
-    },
-    {
-        id: "phrygian",
-        name: "Phrygian",
-        description: "Dark and mysterious",
-        steps: [0, 1, 3, 5, 7, 8, 10],
-    },
-    {
-        // Kept as "japanese" so settings saved before the rename still load.
         id: "japanese",
         name: "Hirajoshi",
         description: "Calm and Japanese-inspired",
@@ -376,7 +363,7 @@ const SCALES = [
 const DEFAULT_SCALE_ID = "major-pentatonic";
 const MIN_OCTAVE = 1;
 const MAX_OCTAVE = 8;
-const DEFAULT_RANGE = { lowOctave: 3, highOctave: 6 };
+const DEFAULT_RANGE = { lowOctave: 4, highOctave: 7 };
 function normalizeRange(lowOctave, highOctave, fallback = DEFAULT_RANGE) {
     const clampOctave = (value, alt) => typeof value === "number" && Number.isFinite(value)
         ? Math.min(MAX_OCTAVE, Math.max(MIN_OCTAVE, Math.round(value)))
@@ -424,9 +411,16 @@ function yToRow(scale, range, y, top, height) {
     return Math.max(0, Math.min(rows - 1, Math.floor(fromBottom * rows)));
 }
 
+const ARP_PATTERNS = ["arp-up", "arp-down"];
 function isArp(rhythm) {
     return typeof rhythm === "string";
 }
+const BACKING_STYLES = [
+    { id: "pop", label: "Pop" },
+    { id: "classic", label: "Classic" },
+    { id: "simple", label: "Simple" },
+    { id: "drone", label: "Drone" },
+];
 const BASS_OCTAVE_MIDI = 36;
 const CHORD_OCTAVE_MIDI = 48;
 // Voice-led upper voices are nudged back when they wander past this window.
@@ -469,40 +463,53 @@ function chord(symbol) {
     const degree = ROMAN[numeral.toLowerCase()];
     return { degree, inversion: suffix === "6" ? 1 : 0 };
 }
-function progression(label, symbols) {
+function progression(symbols) {
     return {
         name: symbols,
-        label,
         chords: symbols.split(" ").map(chord),
     };
 }
+const MAJOR_STYLES = {
+    pop: progression("I vi IV V"),
+    classic: progression("I iii IV V"),
+    simple: progression("I V"),
+    drone: progression("I"),
+};
 /**
- * The same four backings in every scale. Chord qualities follow the mode
- * because the triads are built diatonically from the harmony scale.
+ * Each backing style is the scale's own progression of that kind, so chord
+ * qualities follow the mode. A style a scale has no progression for is left
+ * out; every scale has a drone on its tonic.
  */
-const PROGRESSIONS = [
-    progression("Pop", "I vi IV V"),
-    progression("Classic", "I iii IV V"),
-    progression("Simple", "I V"),
-    progression("Drone", "I"),
-];
-const AEOLIAN_STEPS = [0, 2, 3, 5, 7, 8, 10];
-/** Five-note scales borrow the seven-note scale that contains them. */
+const STYLE_PROGRESSIONS = {
+    major: MAJOR_STYLES,
+    "major-pentatonic": MAJOR_STYLES,
+    dorian: {
+        pop: progression("i III IV"),
+        classic: progression("i III/6 IV/6"),
+        simple: progression("i IV"),
+        drone: progression("i"),
+    },
+    mixolydian: {
+        classic: progression("I vii"),
+        simple: progression("I v"),
+        drone: progression("I"),
+    },
+    lydian: {
+        pop: progression("I II V"),
+        simple: progression("I II"),
+        drone: progression("I"),
+    },
+    japanese: { drone: progression("I") },
+};
 function harmonyScale(scale) {
-    if (scale.id === "major-pentatonic")
-        return getScale("major");
-    if (scale.id === "minor-pentatonic" || scale.id === "japanese") {
-        return { ...scale, steps: AEOLIAN_STEPS };
-    }
-    return scale;
+    return scale.id === "major-pentatonic" ? getScale("major") : scale;
 }
-function progressionsFor(_scaleId) {
-    return PROGRESSIONS;
+function progressionFor(scaleId, style) {
+    return STYLE_PROGRESSIONS[scaleId][style] ?? null;
 }
-function pickProgression(scaleId, index) {
-    const list = progressionsFor();
-    const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
-    return list[clamped];
+/** The styles a scale offers, in tab order. */
+function stylesFor(scaleId) {
+    return BACKING_STYLES.map((s) => s.id).filter((id) => progressionFor(scaleId, id) !== null);
 }
 function triadSemitones(scale, degree) {
     const steps = scale.steps;
@@ -606,8 +613,18 @@ function voiceTones(tones, voicing) {
 function progressionCount(frameWidth) {
     return Math.max(1, Math.round(frameWidth / PROGRESSION_SPAN_PX));
 }
+const PREVIEW_CHORD_SEC = 0.8;
+/** One pass of a backing on its own, for previewing a style. */
+function backingPreview(scale, options) {
+    const prog = progressionFor(scale.id, options.style);
+    if (!prog)
+        return [];
+    return backingHits(scale, PROGRESSION_SPAN_PX, prog.chords.length * PREVIEW_CHORD_SEC, options);
+}
 function backingHits(scale, frameWidth, durationSec, options) {
-    const prog = pickProgression(scale.id, options.progression);
+    const prog = progressionFor(scale.id, options.style);
+    if (!prog)
+        return [];
     const harmony = harmonyScale(scale);
     const count = progressionCount(frameWidth);
     const progressionSec = durationSec / count;
@@ -701,6 +718,7 @@ const PANEL_HTML = `<!doctype html>
     --ring: var(--drawdy-ring, #b3e000);
     --key-white: var(--surface);
     --key-black: #71717a;
+    --grip: #ffffff;
     --tooltip-bg: #52525b;
     --tooltip-fg: #fff;
     --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.1);
@@ -718,7 +736,6 @@ const PANEL_HTML = `<!doctype html>
     --row-selected: rgb(255 255 255 / 0.04);
     --mark: rgb(255 255 255 / 0.1);
     --accent-subtle: rgb(179 224 0 / 0.1);
-    --key-black: rgb(255 255 255 / 0.81);
     --tooltip-bg: #3f3f46;
     --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.4);
 }
@@ -741,6 +758,10 @@ main {
     height: 100%;
     overflow-y: auto;
     padding: 16px;
+    /* The scrollbar's room is always reserved and taken out of the right
+       padding, so content keeps its width whether or not the panel scrolls. */
+    padding-right: var(--scroll-pad, 16px);
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: var(--mark) transparent;
 }
@@ -850,10 +871,20 @@ main {
     width: calc(100% / 50 * 0.64);
     transform: translateX(-50%);
     background: var(--key-black);
-    border-radius: 0 0 1.5px 1.5px;
-    transition: box-shadow 120ms var(--ease);
 }
-.key.black.in-range { box-shadow: inset 0 -2px 0 var(--accent); }
+/* In range: a flat accent bar across the key's square bottom edge. */
+.key.black::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 120ms var(--ease);
+}
+.key.black.in-range::after { opacity: 1; }
 .band {
     position: absolute;
     z-index: 2;
@@ -889,7 +920,7 @@ main {
     height: 20px;
     margin-top: -8px;
     border-radius: 6px;
-    background: var(--surface);
+    background: var(--grip);
     box-shadow: 0 0 0 1px var(--border), var(--grip-shadow);
     transition: transform 120ms var(--ease);
 }
@@ -1149,7 +1180,6 @@ button.section-head { cursor: pointer; }
     0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
     50% { box-shadow: 0 0 0 5px var(--accent-subtle); }
 }
-.footer { margin: 4px 0 0; color: var(--fg-3); }
 
 /* First use */
 .first-use {
@@ -1233,6 +1263,16 @@ button.section-head { cursor: pointer; }
         <div class="segmented" id="backing" role="radiogroup" aria-labelledby="backing-label"></div>
     </div>
 
+    <div class="field" id="voicing-field" hidden>
+        <span class="label" id="voicing-label">Voicing</span>
+        <div class="segmented" id="voicing" role="radiogroup" aria-labelledby="voicing-label"></div>
+    </div>
+
+    <div class="field" id="rhythm-field" hidden>
+        <span class="label" id="rhythm-label">Rhythm</span>
+        <div class="segmented" id="rhythm" role="radiogroup" aria-labelledby="rhythm-label"></div>
+    </div>
+
     <hr class="divider" />
 
     <section class="feel" id="feel">
@@ -1258,7 +1298,6 @@ button.section-head { cursor: pointer; }
         <ul class="frame-list" id="frame-list"></ul>
     </section>
 
-    <p class="footer">Changes apply to all Serene frames.</p>
 </div>
 
 <div class="first-use" id="first-use" hidden>
@@ -1275,12 +1314,10 @@ button.section-head { cursor: pointer; }
     var root = document.documentElement;
     var themeStyle = document.getElementById("theme");
 
-    var BASE_PX_PER_SECOND = 200;
+    var BASE_PX_PER_SECOND = 220;
     var MIN_OCTAVE = 1;
     var MAX_OCTAVE = 8;
     var WHITE_KEYS = 50;
-    var NOTES_LEVEL = 0.8;
-    var BACKING_LEVEL = 0.7;
     var THUMB_WIDTH = 160;
     var PLAY_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6L9.8 6z"/></svg>';
     var PAUSE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 2.5h2v7H3zM7 2.5h2v7H7z"/></svg>';
@@ -1288,13 +1325,14 @@ button.section-head { cursor: pointer; }
     var settings = {
         speed: 1,
         attack: 0.02,
-        volume: 0.7,
-        reverb: 0.3,
+        notes: 0.8,
+        backingLevel: 0.7,
+        reverb: 0.38,
         scale: "major-pentatonic",
-        lowOctave: 3,
-        highOctave: 6,
+        lowOctave: 4,
+        highOctave: 7,
         loop: false,
-        backing: { enabled: false, progression: 0 },
+        backing: { enabled: false, style: "pop", voicing: "full", rhythm: 1 },
     };
     var attentionId = null;
 
@@ -1366,7 +1404,7 @@ button.section-head { cursor: pointer; }
         if (!Ctor) return null;
         var ctx = new Ctor();
         var master = ctx.createGain();
-        master.gain.value = settings.volume;
+        master.gain.value = 1;
         master.connect(ctx.destination);
         var trim = ctx.createGain();
         trim.gain.value = LIMIT_TRIM;
@@ -1519,8 +1557,8 @@ button.section-head { cursor: pointer; }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * BACKING_LEVEL;
-        else peak *= NOTES_LEVEL;
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * settings.backingLevel;
+        else peak *= settings.notes;
         var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
         var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
@@ -1861,6 +1899,24 @@ button.section-head { cursor: pointer; }
         resumeAudio();
     }
 
+    // Browsers only let the panel start sound from a click or key press inside
+    // it, so any of them starts the audio, whatever was pressed.
+    document.addEventListener("pointerdown", unlockAudio, true);
+    document.addEventListener("keydown", unlockAudio, true);
+
+    /**
+     * Runs "play" once sound is allowed. Hover is not a gesture, so this asks
+     * the browser to start audio and plays only if it agrees: after a click in
+     * the panel, or when the host lets the panel autoplay.
+     */
+    function whenAudible(play) {
+        if (audioUnlocked()) {
+            play();
+            return;
+        }
+        resumeAudio().then(function (ok) { if (ok) play(); });
+    }
+
     // A short sine pluck at "at" (default now). The gain sits at 0 from
     // creation, so a pluck cancelled before it starts stays silent.
     function pluck(midi, at, level) {
@@ -1921,10 +1977,87 @@ button.section-head { cursor: pointer; }
 
     function scheduleScalePreview(index) {
         stopScalePreview();
-        scalePreviewTimer = setTimeout(function () {
-            scalePreviewTimer = null;
-            playScalePreview(scales[index]);
+        var timer = setTimeout(function () {
+            whenAudible(function () {
+                // Not if the list closed or moved on while audio was resuming.
+                if (scalePreviewTimer !== timer) return;
+                scalePreviewTimer = null;
+                playScalePreview(scales[index]);
+            });
         }, SCALE_PREVIEW_DELAY_MS);
+        scalePreviewTimer = timer;
+    }
+
+    // ---- Backing preview: resting on a style plays one pass of it
+
+    var BACKING_PREVIEW_DELAY_MS = 220;
+    var backingPreviewTimer = null;
+    var backingPreviewStyle = null;
+    var backingPreviewVoices = [];
+
+    function stopBackingPreview() {
+        clearTimeout(backingPreviewTimer);
+        backingPreviewTimer = null;
+        backingPreviewStyle = null;
+        if (audio) {
+            var now = audio.ctx.currentTime;
+            backingPreviewVoices.forEach(function (voice) {
+                holdParam(voice.gain.gain, now);
+                voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
+                voice.osc.stop(now + 0.2);
+            });
+        }
+        backingPreviewVoices = [];
+    }
+
+    // The driver voices the style in the current scale, voicing and rhythm.
+    function scheduleBackingPreview(style) {
+        stopBackingPreview();
+        backingPreviewStyle = style;
+        backingPreviewTimer = setTimeout(function () {
+            backingPreviewTimer = null;
+            api.postMessage({ type: "preview-backing", style: style });
+        }, BACKING_PREVIEW_DELAY_MS);
+    }
+
+    // Pad chords and arpeggio notes, shaped like the ones playback makes.
+    function playBackingPreview(notes) {
+        if (!audioUnlocked()) return;
+        var ctx = audio.ctx;
+        var now = ctx.currentTime;
+        var start = now + 0.03;
+        backingPreviewVoices = notes.map(function (note) {
+            var at = start + note.t;
+            var hz = 440 * Math.pow(2, (note.midi - 69) / 12);
+            var peak = Math.max(0.0005, note.v * PEAK_GAIN * tilt(hz)) * (note.a ? ARP_GAIN : BACKING_GAIN) * settings.backingLevel;
+            var sustain = Math.max(0.0004, peak * (note.a ? ARP_SUSTAIN : BACKING_SUSTAIN));
+            var attack = note.a ? ARP_ATTACK : note.d >= BACKING_PAD_MIN_SEC ? BACKING_PAD_ATTACK : BACKING_PLUCK_ATTACK;
+            var end = at + Math.max(0.09, note.d);
+            var osc = ctx.createOscillator();
+            osc.type = note.a ? "sine" : "triangle";
+            osc.frequency.value = hz;
+            var gain = ctx.createGain();
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.setValueAtTime(0, at);
+            gain.gain.linearRampToValueAtTime(peak, at + attack);
+            gain.gain.setTargetAtTime(sustain, at + attack, DECAY / 3);
+            gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
+            var source = osc;
+            if (!note.a) {
+                var cutoff = ctx.createBiquadFilter();
+                cutoff.type = "lowpass";
+                cutoff.frequency.value = BACKING_CUTOFF;
+                cutoff.Q.value = 0.6;
+                osc.connect(cutoff);
+                source = cutoff;
+            }
+            source.connect(gain);
+            gain.connect(audio.dry);
+            gain.connect(audio.send);
+            osc.start(now);
+            osc.stop(end + RELEASE * 3);
+            return { osc: osc, gain: gain };
+        });
     }
 
     // ---- Tooltip
@@ -1961,106 +2094,127 @@ button.section-head { cursor: pointer; }
         el.addEventListener("blur", function () { hideTip(el); });
     }
 
-    // ---- Scale select
+    // ---- Dropdowns (Scale, Backing)
 
-    var scaleField = document.getElementById("scale-field");
-    var scaleTrigger = document.getElementById("scale-trigger");
-    var scaleValue = document.getElementById("scale-value");
-    var scaleList = document.getElementById("scale-list");
-    var scales = [];
-    var activeOption = -1;
+    var CHECK_ICON = '<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
 
-    function selectedScaleIndex() {
-        for (var i = 0; i < scales.length; i++) if (scales[i].id === settings.scale) return i;
-        return 0;
-    }
+    /**
+     * A listbox dropdown. "items()" returns { name, description? }, "selected()"
+     * the chosen index, "choose(index)" applies a new choice. "preview(index)" runs
+     * when the user moves onto an option, "stopPreview()" when the list closes.
+     */
+    function createSelect(opts) {
+        var field = document.getElementById(opts.id + "-field");
+        var trigger = document.getElementById(opts.id + "-trigger");
+        var valueEl = document.getElementById(opts.id + "-value");
+        var list = document.getElementById(opts.id + "-list");
+        var active = -1;
 
-    function renderScales() {
-        scaleList.textContent = "";
-        scales.forEach(function (scale, index) {
-            var option = document.createElement("div");
-            option.className = "option";
-            option.id = "scale-option-" + index;
-            option.setAttribute("role", "option");
-            option.setAttribute("aria-selected", scale.id === settings.scale ? "true" : "false");
-            option.innerHTML =
-                '<span class="option-text"><span class="option-name"></span><span class="option-desc"></span></span>' +
-                '<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
-            option.querySelector(".option-name").textContent = scale.name;
-            option.querySelector(".option-desc").textContent = scale.description;
-            option.addEventListener("pointermove", function () { setActiveOption(index, true); });
-            option.addEventListener("click", function () { chooseScale(index); });
-            scaleList.appendChild(option);
+        function render() {
+            list.textContent = "";
+            var items = opts.items();
+            var selected = opts.selected();
+            items.forEach(function (item, index) {
+                var option = document.createElement("div");
+                option.className = "option";
+                option.id = opts.id + "-option-" + index;
+                option.setAttribute("role", "option");
+                option.setAttribute("aria-selected", index === selected ? "true" : "false");
+                option.innerHTML =
+                    '<span class="option-text"><span class="option-name"></span><span class="option-desc"></span></span>' +
+                    CHECK_ICON;
+                option.querySelector(".option-name").textContent = item.name;
+                var desc = option.querySelector(".option-desc");
+                if (item.description) desc.textContent = item.description;
+                else desc.remove();
+                option.addEventListener("pointermove", function () { setActive(index, true); });
+                option.addEventListener("click", function () { choose(index); });
+                list.appendChild(option);
+            });
+            var current = items[selected];
+            valueEl.textContent = current ? current.name : "";
+        }
+
+        function setActive(index, fromUser) {
+            if (index === active) return;
+            active = index;
+            if (fromUser && opts.preview) opts.preview(index);
+            var options = list.children;
+            for (var i = 0; i < options.length; i++) options[i].classList.toggle("active", i === index);
+            if (options[index]) list.setAttribute("aria-activedescendant", options[index].id);
+        }
+
+        function open() {
+            if (!opts.items().length) return;
+            // Opening is a click or key press in the panel, so sound may start here.
+            unlockAudio();
+            list.hidden = false;
+            trigger.setAttribute("aria-expanded", "true");
+            active = -1;
+            setActive(opts.selected(), false);
+            list.focus({ preventScroll: true });
+        }
+
+        function close(refocus) {
+            if (list.hidden) return;
+            if (opts.stopPreview) opts.stopPreview();
+            list.hidden = true;
+            trigger.setAttribute("aria-expanded", "false");
+            if (refocus) trigger.focus({ preventScroll: true });
+        }
+
+        function choose(index) {
+            close(true);
+            if (index === opts.selected() || !opts.items()[index]) return;
+            opts.choose(index);
+            render();
+        }
+
+        trigger.addEventListener("click", function () {
+            if (list.hidden) open();
+            else close(false);
         });
-        var current = scales[selectedScaleIndex()];
-        scaleValue.textContent = current ? current.name : "";
+        trigger.addEventListener("keydown", function (event) {
+            if (["ArrowDown", "ArrowUp", "Enter", " "].indexOf(event.key) < 0) return;
+            event.preventDefault();
+            open();
+        });
+        list.addEventListener("keydown", function (event) {
+            var last = opts.items().length - 1;
+            switch (event.key) {
+                case "ArrowDown": setActive(Math.min(last, active + 1), true); break;
+                case "ArrowUp": setActive(Math.max(0, active - 1), true); break;
+                case "Home": setActive(0, true); break;
+                case "End": setActive(last, true); break;
+                case "Enter":
+                case " ": choose(active); break;
+                case "Escape": close(true); break;
+                case "Tab": close(false); return;
+                default: return;
+            }
+            event.preventDefault();
+        });
+        document.addEventListener("pointerdown", function (event) {
+            if (!field.contains(event.target)) close(false);
+        });
+        return { render: render };
     }
 
-    function setActiveOption(index, preview) {
-        if (index === activeOption) return;
-        activeOption = index;
-        if (preview) scheduleScalePreview(index);
-        var options = scaleList.children;
-        for (var i = 0; i < options.length; i++) {
-            options[i].classList.toggle("active", i === index);
-        }
-        if (options[index]) scaleList.setAttribute("aria-activedescendant", options[index].id);
-    }
+    var scales = [];
 
-    function openSelect() {
-        if (!scales.length) return;
-        // Opening is a click or key press in the panel, so sound may start here.
-        unlockAudio();
-        scaleList.hidden = false;
-        scaleTrigger.setAttribute("aria-expanded", "true");
-        activeOption = -1;
-        setActiveOption(selectedScaleIndex());
-        scaleList.focus({ preventScroll: true });
-    }
-
-    function closeSelect(refocus) {
-        if (scaleList.hidden) return;
-        stopScalePreview();
-        scaleList.hidden = true;
-        scaleTrigger.setAttribute("aria-expanded", "false");
-        if (refocus) scaleTrigger.focus({ preventScroll: true });
-    }
-
-    function chooseScale(index) {
-        var scale = scales[index];
-        closeSelect(true);
-        if (!scale || scale.id === settings.scale) return;
-        settings.scale = scale.id;
-        renderScales();
-        api.postMessage({ type: "scale", value: scale.id });
-    }
-
-    scaleTrigger.addEventListener("click", function () {
-        if (scaleList.hidden) openSelect();
-        else closeSelect(false);
-    });
-    scaleTrigger.addEventListener("keydown", function (event) {
-        if (["ArrowDown", "ArrowUp", "Enter", " "].indexOf(event.key) < 0) return;
-        event.preventDefault();
-        openSelect();
-    });
-    scaleList.addEventListener("keydown", function (event) {
-        var last = scales.length - 1;
-        switch (event.key) {
-            case "ArrowDown": setActiveOption(Math.min(last, activeOption + 1), true); break;
-            case "ArrowUp": setActiveOption(Math.max(0, activeOption - 1), true); break;
-            case "Home": setActiveOption(0, true); break;
-            case "End": setActiveOption(last, true); break;
-            case "Enter":
-            case " ": chooseScale(activeOption); break;
-            case "Escape": closeSelect(true); break;
-            case "Tab": closeSelect(false); return;
-            default: return;
-        }
-        event.preventDefault();
-    });
-    document.addEventListener("pointerdown", function (event) {
-        if (!scaleField.contains(event.target)) closeSelect(false);
+    var scaleSelect = createSelect({
+        id: "scale",
+        items: function () { return scales; },
+        selected: function () {
+            for (var i = 0; i < scales.length; i++) if (scales[i].id === settings.scale) return i;
+            return 0;
+        },
+        choose: function (index) {
+            settings.scale = scales[index].id;
+            api.postMessage({ type: "scale", value: settings.scale });
+        },
+        preview: function (index) { scheduleScalePreview(index); },
+        stopPreview: function () { stopScalePreview(); },
     });
 
     // ---- Range piano
@@ -2227,58 +2381,80 @@ button.section-head { cursor: pointer; }
         });
     });
 
-    // ---- Backing segmented control
+    // ---- Backing: named styles, each the current scale's own progression
 
+    var backingStyles = [];
     var backingEl = document.getElementById("backing");
-    var backingOptions = [];
 
-    function backingIndex() {
-        return settings.backing.enabled ? settings.backing.progression : -1;
+    function isArp(rhythm) {
+        return typeof rhythm === "string";
     }
 
-    function renderBacking() {
-        backingEl.textContent = "";
-        var items = [{ name: "Off", tip: "No backing chords", index: -1 }].concat(
-            backingOptions.map(function (option, index) {
-                return { name: option.name, tip: "Chords " + option.progression, index: index };
+    function setBacking(patch) {
+        var next = {};
+        for (var key in settings.backing) next[key] = settings.backing[key];
+        for (var key2 in patch) next[key2] = patch[key2];
+        settings.backing = next;
+        renderBackingRows();
+        api.postMessage({ type: "backing", value: settings.backing });
+    }
+
+    function backingItems() {
+        return [{ value: "off", label: "Off", tip: "No backing chords", disabled: false }].concat(
+            backingStyles.map(function (style) {
+                return {
+                    value: style.id,
+                    label: style.label,
+                    tip: style.progression ? "Chords " + style.progression : "Not in this scale",
+                    disabled: !style.progression,
+                };
             })
         );
-        items.forEach(function (item) {
+    }
+
+    function currentBacking() {
+        return settings.backing.enabled ? settings.backing.style : "off";
+    }
+
+    function chooseBacking(value) {
+        if (value === currentBacking()) return;
+        if (value === "off") setBacking({ enabled: false });
+        else setBacking({ enabled: true, style: value });
+    }
+
+    // Rebuilt when the scale changes, since the scale decides which styles exist.
+    function renderBackingTabs() {
+        backingEl.textContent = "";
+        backingItems().forEach(function (item) {
             var button = document.createElement("button");
             button.type = "button";
             button.className = "segment";
             button.setAttribute("role", "radio");
-            button.dataset.index = String(item.index);
-            button.dataset.tip = item.tip;
-            button.textContent = item.name;
-            button.addEventListener("click", function () { chooseBacking(item.index); });
+            button.dataset.value = item.value;
+            button.textContent = item.label;
+            button.disabled = item.disabled;
+            button.addEventListener("click", function () { chooseBacking(item.value); });
+            if (item.value !== "off" && !item.disabled) {
+                button.addEventListener("pointerenter", function () { scheduleBackingPreview(item.value); });
+                button.addEventListener("pointerleave", stopBackingPreview);
+            }
             bindTip(button, function () { return item.tip; });
             backingEl.appendChild(button);
         });
-        updateBacking();
+        updateBackingTabs();
     }
 
-    function updateBacking() {
-        var current = backingIndex();
+    function updateBackingTabs() {
+        var value = currentBacking();
         Array.prototype.forEach.call(backingEl.children, function (button) {
-            var on = Number(button.dataset.index) === current;
+            var on = button.dataset.value === value;
             button.setAttribute("aria-checked", on ? "true" : "false");
             button.tabIndex = on ? 0 : -1;
         });
     }
 
-    function chooseBacking(index) {
-        if (index === backingIndex()) return;
-        settings.backing =
-            index < 0
-                ? { enabled: false, progression: settings.backing.progression }
-                : { enabled: true, progression: index };
-        updateBacking();
-        api.postMessage({ type: "backing", value: settings.backing });
-    }
-
     backingEl.addEventListener("keydown", function (event) {
-        var buttons = Array.prototype.slice.call(backingEl.children);
+        var buttons = Array.prototype.slice.call(backingEl.children).filter(function (b) { return !b.disabled; });
         var at = buttons.indexOf(document.activeElement);
         if (at < 0) return;
         var next;
@@ -2292,10 +2468,94 @@ button.section-head { cursor: pointer; }
             default: return;
         }
         event.preventDefault();
-        chooseBacking(Number(buttons[next].dataset.index));
+        chooseBacking(buttons[next].dataset.value);
         buttons[next].focus();
-        showTip(buttons[next], buttons[next].dataset.tip);
+        var item = backingItems().filter(function (i) { return i.value === buttons[next].dataset.value; })[0];
+        if (item) showTip(buttons[next], item.tip);
     });
+
+    /** A row of segments; "items" are { value, label, tip }. */
+    function createSegmented(id, items, current, choose) {
+        var el = document.getElementById(id);
+        items.forEach(function (item, index) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "segment";
+            button.setAttribute("role", "radio");
+            button.dataset.index = String(index);
+            button.textContent = item.label;
+            button.addEventListener("click", function () { choose(item.value); });
+            bindTip(button, function () { return item.tip; });
+            el.appendChild(button);
+        });
+        el.addEventListener("keydown", function (event) {
+            var buttons = Array.prototype.slice.call(el.children);
+            var at = buttons.indexOf(document.activeElement);
+            if (at < 0) return;
+            var next;
+            switch (event.key) {
+                case "ArrowLeft":
+                case "ArrowUp": next = (at - 1 + buttons.length) % buttons.length; break;
+                case "ArrowRight":
+                case "ArrowDown": next = (at + 1) % buttons.length; break;
+                case "Home": next = 0; break;
+                case "End": next = buttons.length - 1; break;
+                default: return;
+            }
+            event.preventDefault();
+            choose(items[next].value);
+            buttons[next].focus();
+            showTip(buttons[next], items[next].tip);
+        });
+        return {
+            render: function () {
+                var value = current();
+                Array.prototype.forEach.call(el.children, function (button, index) {
+                    var on = items[index].value === value;
+                    button.setAttribute("aria-checked", on ? "true" : "false");
+                    button.tabIndex = on ? 0 : -1;
+                });
+            },
+        };
+    }
+
+    var voicingControl = createSegmented(
+        "voicing",
+        [
+            { value: "bass", label: "Bass", tip: "Bass note only" },
+            { value: "omit3", label: "No 3rd", tip: "Bass, root and fifth" },
+            { value: "full", label: "Full", tip: "Bass and the full triad" },
+        ],
+        function () { return settings.backing.voicing; },
+        function (value) { if (value !== settings.backing.voicing) setBacking({ voicing: value }); }
+    );
+
+    var rhythmControl = createSegmented(
+        "rhythm",
+        [
+            { value: 1, label: "1\u00d7", tip: "One strike per chord" },
+            { value: 2, label: "2\u00d7", tip: "Two strikes per chord" },
+            { value: 4, label: "4\u00d7", tip: "Four strikes per chord" },
+            { value: "arp-up", label: "Arp \\u2191", tip: "Arpeggio up over a held bass" },
+            { value: "arp-down", label: "Arp \\u2193", tip: "Arpeggio down over a held bass" },
+        ],
+        function () { return settings.backing.rhythm; },
+        function (value) { if (value !== settings.backing.rhythm) setBacking({ rhythm: value }); }
+    );
+
+    var voicingField = document.getElementById("voicing-field");
+    var rhythmField = document.getElementById("rhythm-field");
+
+    // Voicing and Rhythm only matter with a backing on; arpeggios set their own voicing.
+    function renderBackingRows() {
+        updateBackingTabs();
+        var on = settings.backing.enabled;
+        rhythmField.hidden = !on;
+        voicingField.hidden = !on || isArp(settings.backing.rhythm);
+        voicingControl.render();
+        rhythmControl.render();
+        showBackingLevel(on);
+    }
 
     // ---- Feel
 
@@ -2326,9 +2586,10 @@ button.section-head { cursor: pointer; }
 
     var SLIDERS = [
         { key: "speed", label: "Speed", min: 0.5, max: 2, step: 0.05, def: 1, marks: "ticks", widest: "0.55\u00d7", format: formatSpeed },
-        { key: "attack", label: "Attack", min: 0, max: 1, step: 0.01, def: 0.02, marks: "dots", widest: "1000ms", format: formatMs, hint: "Lower is sharper, higher is softer" },
-        { key: "volume", label: "Volume", min: 0, max: 1, step: 0.01, def: 0.7, marks: "dots", widest: "100%", format: formatPercent },
-        { key: "reverb", label: "Reverb", min: 0, max: 1, step: 0.01, def: 0.3, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "attack", label: "Attack", min: 0, max: 0.3, step: 0.005, def: 0.02, marks: "dots", widest: "300ms", format: formatMs, hint: "Lower is sharper, higher is softer" },
+        { key: "notes", label: "Notes", min: 0, max: 1, step: 0.01, def: 0.8, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "backingLevel", label: "Backing", min: 0, max: 1, step: 0.01, def: 0.7, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "reverb", label: "Reverb", min: 0, max: 1, step: 0.01, def: 0.38, marks: "dots", widest: "100%", format: formatPercent },
     ];
 
     function quantize(spec, raw) {
@@ -2353,7 +2614,6 @@ button.section-head { cursor: pointer; }
         }
         if (!audio) return;
         var now = audio.ctx.currentTime;
-        if (key === "volume") audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
         if (key === "reverb") audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
     }
 
@@ -2364,13 +2624,18 @@ button.section-head { cursor: pointer; }
         }
         api.postMessage({
             type: "knobs",
-            values: { attack: settings.attack, volume: settings.volume, reverb: settings.reverb },
+            values: {
+                attack: settings.attack,
+                notes: settings.notes,
+                backingLevel: settings.backingLevel,
+                reverb: settings.reverb,
+            },
         });
     }
 
     function renderSummary() {
         feelSummary.textContent =
-            settings.speed.toFixed(2) + "\u00d7 \u00b7 " + formatMs(settings.attack) + " \u00b7 " + formatPercent(settings.volume);
+            settings.speed.toFixed(2) + "\u00d7 \u00b7 " + formatMs(settings.attack) + " \u00b7 " + formatPercent(settings.notes);
     }
 
     function measureText(text) {
@@ -2560,6 +2825,16 @@ button.section-head { cursor: pointer; }
     }
 
     var sliders = SLIDERS.map(buildSlider);
+    showBackingLevel(settings.backing.enabled);
+
+    // The Backing level slider only shows while a backing is on.
+    function showBackingLevel(on) {
+        sliders.forEach(function (slider) {
+            if (slider.spec.key !== "backingLevel") return;
+            slider.el.hidden = !on;
+            if (on) layoutSlider(slider);
+        });
+    }
 
     function layoutSliders() {
         sliders.forEach(layoutSlider);
@@ -2581,6 +2856,15 @@ button.section-head { cursor: pointer; }
     });
 
     if (window.ResizeObserver) new ResizeObserver(layoutSliders).observe(slidersEl);
+
+    // Keep 16px of space on the right whether the scrollbar takes room or overlays.
+    var mainEl = document.querySelector("main");
+    function fitScrollGutter() {
+        var gutter = mainEl.offsetWidth - mainEl.clientWidth;
+        root.style.setProperty("--scroll-pad", Math.max(0, 16 - gutter) + "px");
+    }
+    fitScrollGutter();
+    window.addEventListener("resize", fitScrollGutter);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutSliders);
 
     // ---- Frames
@@ -2823,7 +3107,7 @@ button.section-head { cursor: pointer; }
     // ---- Settings from the driver
 
     function applySettings(values) {
-        ["speed", "attack", "volume", "reverb"].forEach(function (key) {
+        ["speed", "attack", "notes", "backingLevel", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") settings[key] = values[key];
         });
         if (typeof values.scale === "string") settings.scale = values.scale;
@@ -2833,14 +3117,13 @@ button.section-head { cursor: pointer; }
         }
         if (values.backing && typeof values.backing === "object") settings.backing = values.backing;
         if (typeof values.loop === "boolean") setLoop(values.loop);
-        renderScales();
+        scaleSelect.render();
         renderRange();
-        updateBacking();
+        renderBackingRows();
         renderSliders();
         renderRowStates();
         if (audio) {
             var now = audio.ctx.currentTime;
-            audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
             audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
         }
     }
@@ -2900,15 +3183,23 @@ button.section-head { cursor: pointer; }
             case "seek":
                 seekTo(msg.t);
                 return;
+            case "backing-preview":
+                // Only if the pointer is still resting on that style.
+                whenAudible(function () {
+                    if (msg.style === backingPreviewStyle) playBackingPreview(msg.notes);
+                });
+                return;
             case "backing":
-                backingOptions = msg.options;
+                stopBackingPreview();
+                backingStyles = msg.styles;
                 settings.backing = msg.value;
-                renderBacking();
+                renderBackingTabs();
+                renderBackingRows();
                 return;
             case "scales":
                 scales = msg.scales;
                 settings.scale = msg.current;
-                renderScales();
+                scaleSelect.render();
                 return;
             case "score":
                 receiveScore(msg);
@@ -2974,9 +3265,9 @@ async function openPanel(ctx, styling) {
         },
     });
 }
-const backingOptions = () => PROGRESSIONS.map((progression) => ({
-    name: progression.label,
-    progression: progression.name,
+const backingStyles = (scaleId) => BACKING_STYLES.map((style) => ({
+    ...style,
+    progression: progressionFor(scaleId, style.id)?.name ?? null,
 }));
 const scaleOptions = () => SCALES.map((scale) => ({
     id: scale.id,
@@ -2999,6 +3290,12 @@ const EMPTY_MIN_HEIGHT = 140;
 const IDLE_PLAYHEAD_OPACITY = 0.4;
 const TERTIARY_OPACITY = 0.5;
 const EMPTY_TEXT_HEIGHT = 24;
+// The playhead handle grows this much while hovered or dragged.
+const HANDLE_ACTIVE_SCALE = 1.25;
+// Pointer target around the handle, a little larger than the handle itself.
+const HANDLE_HIT = { width: 24, height: 30 };
+// How far past the visible area the drag shield reaches, in viewport sizes.
+const SHIELD_REACH = 1;
 // Text boxes at least this tall sit at their top whatever the host's line height.
 const LABEL_BOX = 24;
 function truncate(name) {
@@ -3068,6 +3365,7 @@ class FrameOverlay {
     _ctx;
     _styling;
     _onClickTarget;
+    _onPointerTarget;
     _frames = [];
     _zoom = 1;
     _settings = {
@@ -3082,21 +3380,31 @@ class FrameOverlay {
     _rangePreview = null;
     _rangeTimer = null;
     _dragging = false;
+    /** Dragging a playhead: shown where the pointer is, applied on release. */
+    _scrub = null;
+    _shield = null;
+    _handleHover = null;
     _guides;
     _labels;
     _playheads;
+    _hits;
     _dirty = false;
     _syncing = false;
     _clickIds = new Set();
+    _pointerIds = new Set();
     constructor(_ctx, _styling, 
     /** Asks for click events on a DOM id the overlay draws. */
-    _onClickTarget) {
+    _onClickTarget, 
+    /** Asks for scene pointer events on a preview element the overlay draws. */
+    _onPointerTarget) {
         this._ctx = _ctx;
         this._styling = _styling;
         this._onClickTarget = _onClickTarget;
+        this._onPointerTarget = _onPointerTarget;
         this._guides = new PreviewBatch(_ctx);
         this._labels = new PreviewBatch(_ctx);
         this._playheads = new PreviewBatch(_ctx);
+        this._hits = new PreviewBatch(_ctx, true);
     }
     _id(part, frameId) {
         return `${this._ctx.driverId}:${part}:${frameId}`;
@@ -3104,6 +3412,13 @@ class FrameOverlay {
     frameForBar(domId) {
         const prefix = "serene-bar-";
         return domId.startsWith(prefix) ? domId.slice(prefix.length) : null;
+    }
+    _pointable(elementId) {
+        if (!this._pointerIds.has(elementId)) {
+            this._pointerIds.add(elementId);
+            this._onPointerTarget(elementId);
+        }
+        return elementId;
     }
     _clickable(domId) {
         if (!this._clickIds.has(domId)) {
@@ -3185,6 +3500,76 @@ class FrameOverlay {
         this._active.progress = Math.min(1, Math.max(0, progress));
         this._request();
     }
+    // ---- Dragging the playhead
+    get isScrubbing() {
+        return this._scrub !== null;
+    }
+    /** The frame whose playhead handle is among `ids`, if any. */
+    frameForHandle(ids) {
+        const prefix = `${this._ctx.driverId}:playhead-hit:`;
+        const hit = ids.find((id) => id.startsWith(prefix));
+        return hit ? hit.slice(prefix.length) : null;
+    }
+    setHandleHover(frameId) {
+        if (frameId === this._handleHover)
+            return;
+        this._handleHover = frameId;
+        this._request();
+    }
+    _progressAt(frameId, x) {
+        const frame = this._frames.find((f) => f.id === frameId);
+        if (!frame || frame.rect.width <= 0)
+            return null;
+        return Math.min(1, Math.max(0, (x - frame.rect.x) / frame.rect.width));
+    }
+    async beginScrub(frameId, x) {
+        const progress = this._progressAt(frameId, x);
+        if (progress === null)
+            return;
+        this._scrub = { frameId, progress };
+        this._request();
+        // A large invisible target keeps the drag's moves and release on Serene
+        // instead of starting a selection or a stroke on the board.
+        const { rect } = unwrap(await this._ctx.issueCommand({ type: "command:camera:get-viewport-rect", ...stamp(this._ctx) }));
+        if (!this._scrub)
+            return;
+        this._shield = {
+            x: rect.x - rect.width * SHIELD_REACH,
+            y: rect.y - rect.height * SHIELD_REACH,
+            width: rect.width * (1 + SHIELD_REACH * 2),
+            height: rect.height * (1 + SHIELD_REACH * 2),
+        };
+        this._request();
+    }
+    scrubTo(x) {
+        if (!this._scrub)
+            return;
+        const progress = this._progressAt(this._scrub.frameId, x);
+        if (progress === null || progress === this._scrub.progress)
+            return;
+        this._scrub.progress = progress;
+        this._request();
+    }
+    /** Ends the drag and returns where it landed; the caller seeks playback there. */
+    endScrub() {
+        const scrub = this._scrub;
+        if (!scrub)
+            return null;
+        this._scrub = null;
+        this._shield = null;
+        // Hold the playhead where it was dropped until playback reports back.
+        const playing = this._active?.id === scrub.frameId && this._active.playing;
+        this._active = { id: scrub.frameId, progress: scrub.progress, playing };
+        this._request();
+        return scrub;
+    }
+    cancelScrub() {
+        if (!this._scrub)
+            return;
+        this._scrub = null;
+        this._shield = null;
+        this._request();
+    }
     /** Show the guides on one frame while Range is adjusted in the panel. */
     previewRange() {
         const target = this._frames.find((f) => this._selection.has(f.id)) ?? this._frames[0];
@@ -3233,21 +3618,31 @@ class FrameOverlay {
     _playheadOn(frame) {
         return (this._hovered === frame.id ||
             this._selection.has(frame.id) ||
-            this._active?.id === frame.id);
+            this._active?.id === frame.id ||
+            this._scrub?.frameId === frame.id);
+    }
+    /** Where a frame's playhead sits: the drag position while dragging, else playback. */
+    _progressOf(frame) {
+        if (this._scrub?.frameId === frame.id)
+            return this._scrub.progress;
+        return this._active?.id === frame.id ? this._active.progress : 0;
     }
     async _sync() {
         const frames = this._dragging ? [] : this._frames;
         const guides = [];
         const labels = [];
         const playheads = [];
+        const hits = [];
         for (const frame of frames) {
             labels.push(...this._bar(frame));
             if (this._guidesOn(frame)) {
                 guides.push(...this._ticks(frame));
                 labels.push(...this._rulerLabels(frame), ...this._noteLabels(frame));
             }
-            if (this._playheadOn(frame))
+            if (this._playheadOn(frame)) {
                 playheads.push(...this._playhead(frame));
+                hits.push(this._handleHit(frame));
+            }
             if (frame.empty)
                 labels.push(...this._emptyState(frame));
         }
@@ -3255,6 +3650,7 @@ class FrameOverlay {
             this._guides.sync(guides),
             this._labels.sync(labels),
             this._playheads.sync(playheads),
+            this._hits.sync(this._shield ? [...hits, this._shieldElement(this._shield)] : hits),
         ]);
     }
     // ---- Builders
@@ -3385,13 +3781,17 @@ class FrameOverlay {
         const zoom = this._zoom;
         const { x, y, width, height } = frame.rect;
         const active = this._active?.id === frame.id ? this._active : null;
-        const px = x + (active?.progress ?? 0) * width;
-        const w = BOARD.handleWidth / zoom;
-        const h = BOARD.handleHeight / zoom;
-        const top = y - BOARD.handleAbove / zoom;
+        const scrubbing = this._scrub?.frameId === frame.id;
+        const progress = this._progressOf(frame);
+        const px = x + progress * width;
+        const grow = scrubbing || this._handleHover === frame.id ? HANDLE_ACTIVE_SCALE : 1;
+        const w = (BOARD.handleWidth * grow) / zoom;
+        const h = (BOARD.handleHeight * grow) / zoom;
+        // Grow about the handle's resting center.
+        const top = y + (BOARD.handleHeight / 2 - BOARD.handleAbove) / zoom - h / 2;
         const mid = top + h / 2;
-        const grip = 3 / zoom;
-        const idle = !active || (!active.playing && active.progress === 0);
+        const grip = (3 * grow) / zoom;
+        const idle = !scrubbing && (!active || (!active.playing && progress === 0));
         const gripLine = (part, dx, seed) => ({
             type: "line",
             drawdyElementId: this._id(part, frame.id),
@@ -3419,13 +3819,32 @@ class FrameOverlay {
             },
         ];
     }
+    _handleHit(frame) {
+        const zoom = this._zoom;
+        const centerX = frame.rect.x + this._progressOf(frame) * frame.rect.width;
+        const centerY = frame.rect.y + (BOARD.handleHeight / 2 - BOARD.handleAbove) / zoom;
+        const width = HANDLE_HIT.width / zoom;
+        const height = HANDLE_HIT.height / zoom;
+        return {
+            ...this._rect(this._pointable(this._id("playhead-hit", frame.id)), { x: centerX - width / 2, y: centerY - height / 2, width, height }, this._styling.primary, "transparent", 0, 65),
+            opacity: 0,
+        };
+    }
+    _shieldElement(rect) {
+        return {
+            ...this._rect(this._pointable(`${this._ctx.driverId}:playhead-shield`), rect, this._styling.primary, "transparent", 0, 66),
+            opacity: 0,
+        };
+    }
     _timeText(frame) {
         const duration = frame.rect.width / this._settings.pxPerSecond;
         const active = this._active?.id === frame.id ? this._active : null;
-        if (!active || (!active.playing && active.progress === 0)) {
+        const scrubbing = this._scrub?.frameId === frame.id;
+        const progress = this._progressOf(frame);
+        if (!scrubbing && (!active || (!active.playing && progress === 0))) {
             return formatClock(duration);
         }
-        return `${formatClock(active.progress * duration)} / ${formatClock(duration)}`;
+        return `${formatClock(progress * duration)} / ${formatClock(duration)}`;
     }
     _bar(frame) {
         const zoom = this._zoom;
@@ -3699,8 +4118,8 @@ async function addSereneFrame(ctx) {
     return id;
 }
 
-/** Sweep rate at Speed 1.0x: a 960 px frame lasts 4.8 s. */
-const BASE_PX_PER_SECOND = 200;
+/** Sweep rate at Speed 1.0x, the original default rate. */
+const BASE_PX_PER_SECOND = 220;
 const DEFAULT_SCORE_OPTIONS = {
     pxPerSecond: BASE_PX_PER_SECOND,
     stepsPerSecond: 8,
@@ -4132,7 +4551,9 @@ const MAX_SPEED = 2;
 const SPEED_STEP = 0.05;
 const DEFAULT_BACKING = {
     enabled: false,
-    progression: 0,
+    style: "pop",
+    voicing: "full",
+    rhythm: 1,
 };
 const DEFAULT_SETTINGS = {
     speed: 1,
@@ -4141,8 +4562,9 @@ const DEFAULT_SETTINGS = {
     lowOctave: DEFAULT_RANGE.lowOctave,
     highOctave: DEFAULT_RANGE.highOctave,
     attack: 0.02,
-    volume: 0.7,
-    reverb: 0.3,
+    notes: 0.8,
+    backingLevel: 0.7,
+    reverb: 0.38,
     backing: DEFAULT_BACKING,
 };
 function speedToPxPerSecond(speed) {
@@ -4152,27 +4574,51 @@ function clampSpeed(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) {
         return DEFAULT_SETTINGS.speed;
     }
-    // Before 1.5 speed was stored in px per second (40 to 900).
+    // Before 1.4.1 speed was stored in px per second (40 to 900).
     const multiplier = value > MAX_SPEED * 4 ? value / BASE_PX_PER_SECOND : value;
     const clamped = Math.min(MAX_SPEED, Math.max(MIN_SPEED, multiplier));
     return Number((Math.round(clamped / SPEED_STEP) * SPEED_STEP).toFixed(2));
 }
-function sanitizeBacking(raw, current = DEFAULT_BACKING) {
+const VOICINGS = ["bass", "omit3", "full"];
+const RHYTHMS = [1, 2, 4, ...ARP_PATTERNS];
+// Before the named styles, backing was an index into each scale's own list.
+const LEGACY_STYLES = {
+    major: ["pop", "classic", "simple", null, "drone"],
+    "major-pentatonic": ["pop", "classic", "simple", null, "drone"],
+    dorian: ["pop", "simple", "classic"],
+    mixolydian: ["simple", "classic"],
+    lydian: ["pop", null, "simple", null, "drone"],
+    japanese: ["drone"],
+};
+function isStyle(value) {
+    return BACKING_STYLES.some((style) => style.id === value);
+}
+function sanitizeBacking(raw, scale, current = DEFAULT_BACKING) {
     if (typeof raw !== "object" || raw === null)
         return current;
     const record = raw;
-    const last = PROGRESSIONS.length - 1;
-    const progression = typeof record.progression === "number" && Number.isFinite(record.progression)
-        ? Math.min(last, Math.max(0, Math.floor(record.progression)))
-        : Math.min(last, current.progression);
+    const legacy = typeof record.progression === "number" ? LEGACY_STYLES[scale][record.progression] : null;
+    const wanted = isStyle(record.style) ? record.style : (legacy ?? current.style);
+    // A style the scale has no progression for falls back to the first it has.
+    const available = stylesFor(scale);
+    const style = available.includes(wanted) ? wanted : available[0];
+    const voicing = VOICINGS.includes(record.voicing)
+        ? record.voicing
+        : current.voicing;
+    const rhythm = RHYTHMS.includes(record.rhythm)
+        ? record.rhythm
+        : current.rhythm;
     return {
         enabled: typeof record.enabled === "boolean" ? record.enabled : current.enabled,
-        progression,
+        style,
+        voicing,
+        rhythm,
     };
 }
 const KNOB_RANGES = {
-    attack: [0, 1],
-    volume: [0, 1],
+    attack: [0, 0.3],
+    notes: [0, 1],
+    backingLevel: [0, 1],
     reverb: [0, 1],
 };
 function clampNumber(value, min, max, fallback) {
@@ -4196,7 +4642,7 @@ function sanitizeSettings(raw) {
         scale,
         loop: raw.loop === true,
         ...normalizeRange(raw.lowOctave, raw.highOctave),
-        backing: sanitizeBacking(raw.backing),
+        backing: sanitizeBacking(raw.backing, scale),
     };
 }
 async function loadSettings(ctx) {
@@ -4246,6 +4692,8 @@ class SereneSession {
     _panelOpened = false;
     _selection = [];
     _pendingRename = null;
+    // A seek made before the panel has loaded; sent again once it is ready.
+    _pendingSeek = null;
     constructor(_ctx, _overlay, _styling) {
         this._ctx = _ctx;
         this._overlay = _overlay;
@@ -4323,7 +4771,7 @@ class SereneSession {
     postBacking() {
         postToPanel(this._ctx, {
             type: "backing",
-            options: backingOptions(),
+            styles: backingStyles(this._settings.scale),
             value: this._settings.backing,
         });
     }
@@ -4408,6 +4856,21 @@ class SereneSession {
         postToPanel(this._ctx, { type: "stop" });
         this._overlay.setActive(null, false);
     }
+    /**
+     * Moves a frame's playback position. Another frame's score is loaded first,
+     * without playing, so the next play starts from there.
+     */
+    async seekFrame(frameId, progress) {
+        if (!this._score || this._frameIds[0] !== frameId) {
+            if (!(await this._resolve([frameId])))
+                return;
+            this._postScore(false);
+        }
+        if (!this._score)
+            return;
+        this._pendingSeek = progress * this._score.durationSec;
+        postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
+    }
     async selectFrame(frameId) {
         await selectFrame(this._ctx, frameId);
     }
@@ -4438,16 +4901,30 @@ class SereneSession {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
                     this._postScore(autoplay);
+                    if (this._pendingSeek !== null && !autoplay) {
+                        postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
+                    }
                 }
+                this._pendingSeek = null;
                 return;
             case "started":
                 this._pendingAutoplay = false;
+                this._pendingSeek = null;
                 this._playing = true;
                 this._overlay.setActive(this._frameIds[0] ?? null, true);
                 return;
             case "progress":
                 if (this._score && this._score.durationSec > 0) {
-                    this._overlay.setProgress(message.t / this._score.durationSec);
+                    const progress = message.t / this._score.durationSec;
+                    if (!this._playing) {
+                        // Stop and end clear the playhead themselves; a fresh score's
+                        // 0 would only flash it back before a seek lands.
+                        if (progress === 0 || !this._frameIds[0])
+                            return;
+                        // A paused position (after a seek, say) holds the playhead there.
+                        this._overlay.setActive(this._frameIds[0], false);
+                    }
+                    this._overlay.setProgress(progress);
                 }
                 return;
             case "paused":
@@ -4500,16 +4977,38 @@ class SereneSession {
                 return;
             case "scale": {
                 const scale = getScale(message.value).id;
-                this._updateSettings({ scale });
+                // Each scale has its own progressions; keep the choice in range.
+                this._updateSettings({
+                    scale,
+                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
+                });
+                this.postBacking();
                 if (!this._rect)
                     return;
                 this._rebuild();
                 this._postScore(false, true);
                 return;
             }
+            case "preview-backing": {
+                const style = BACKING_STYLES.find((s) => s.id === message.style)?.id;
+                if (!style)
+                    return;
+                const notes = backingPreview(getScale(this._settings.scale), {
+                    ...this._settings.backing,
+                    style,
+                }).map((hit) => ({
+                    t: hit.startSec,
+                    d: hit.durationSec,
+                    midi: hit.midi,
+                    v: hit.velocity,
+                    a: hit.arp,
+                }));
+                postToPanel(this._ctx, { type: "backing-preview", style, notes });
+                return;
+            }
             case "backing":
                 this._updateSettings({
-                    backing: sanitizeBacking(message.value, this._settings.backing),
+                    backing: sanitizeBacking(message.value, this._settings.scale, this._settings.backing),
                 });
                 if (!this._rect)
                     return;
@@ -4526,9 +5025,7 @@ class SereneSession {
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
-            backing: this._settings.backing.enabled
-                ? { progression: this._settings.backing.progression, voicing: "full", rhythm: 1 }
-                : null,
+            backing: this._settings.backing.enabled ? this._settings.backing : null,
         });
     }
     _postScore(autoplay, live = false) {
@@ -4561,6 +5058,15 @@ function subscribeClick(ctx, domElementId) {
     })
         .catch(() => undefined);
 }
+function subscribePointer(ctx, elementId) {
+    void ctx
+        .issueCommand({
+        type: "subscription:scene:pointer",
+        ...stamp(ctx),
+        req: { elementIds: [elementId] },
+    })
+        .catch(() => undefined);
+}
 const DOUBLE_CLICK_MS = 400;
 let lastBarClick = null;
 const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
@@ -4571,7 +5077,7 @@ const activate = async ({ manifest, issueCommand, generateId, styling, }) => {
         generateId,
         nextRequestId: () => String(requestId++),
     };
-    const overlay = new FrameOverlay(ctx, styling, (domId) => subscribeClick(ctx, domId));
+    const overlay = new FrameOverlay(ctx, styling, (domId) => subscribeClick(ctx, domId), (elementId) => subscribePointer(ctx, elementId));
     const session = new SereneSession(ctx, overlay, styling);
     driver = { ctx, session, overlay, styling };
     await session.restoreSettings();
@@ -4630,6 +5136,32 @@ const onEvent = async (event) => {
         case "subscription:scene:pointer-position": {
             const { x, y } = event.body.position.canvasSpace;
             overlay.setPointer(x, y);
+            overlay.scrubTo(x);
+            return;
+        }
+        case "subscription:scene:pointer": {
+            // Dragging a playhead handle: it follows the pointer and playback
+            // jumps to where it is released.
+            const body = event.body;
+            if (body.type === "cancel") {
+                overlay.cancelScrub();
+                overlay.setHandleHover(null);
+                return;
+            }
+            const frameId = overlay.frameForHandle(body.drawdyElementIds);
+            if (body.type === "down") {
+                if (frameId)
+                    await overlay.beginScrub(frameId, body.cursor.canvasSpace.x);
+                return;
+            }
+            if (body.type === "up") {
+                const landed = overlay.endScrub();
+                if (landed)
+                    await session.seekFrame(landed.frameId, landed.progress);
+                return;
+            }
+            if (frameId)
+                overlay.setHandleHover(body.type === "enter" ? frameId : null);
             return;
         }
         case "subscription:scene:drawdy-element-selection": {

@@ -1,4 +1,5 @@
 import { ModuleStyling, SubscribedDrawdyElement } from "@drawdy/driver-protocol";
+import { BACKING_STYLES, backingPreview } from "../score/chords";
 import { Rect, rectsOverlap } from "../score/geometry";
 import { Ink, elementBounds, laserInk, sceneInk } from "../score/ink";
 import { getScale, normalizeRange } from "../score/pitch";
@@ -15,9 +16,9 @@ import {
 } from "./frames";
 import {
     PanelToDriver,
-    backingOptions,
     openPanel,
     postToPanel,
+    backingStyles,
     scaleOptions,
     serializeScore,
     stylingCssVars,
@@ -53,6 +54,8 @@ export class SereneSession {
     private _panelOpened = false;
     private _selection: string[] = [];
     private _pendingRename: string | null = null;
+    // A seek made before the panel has loaded; sent again once it is ready.
+    private _pendingSeek: number | null = null;
 
     public constructor(
         private readonly _ctx: Ctx,
@@ -141,7 +144,7 @@ export class SereneSession {
     public postBacking(): void {
         postToPanel(this._ctx, {
             type: "backing",
-            options: backingOptions(),
+            styles: backingStyles(this._settings.scale),
             value: this._settings.backing,
         });
     }
@@ -229,6 +232,20 @@ export class SereneSession {
         this._overlay.setActive(null, false);
     }
 
+    /**
+     * Moves a frame's playback position. Another frame's score is loaded first,
+     * without playing, so the next play starts from there.
+     */
+    public async seekFrame(frameId: string, progress: number): Promise<void> {
+        if (!this._score || this._frameIds[0] !== frameId) {
+            if (!(await this._resolve([frameId]))) return;
+            this._postScore(false);
+        }
+        if (!this._score) return;
+        this._pendingSeek = progress * this._score.durationSec;
+        postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
+    }
+
     public async selectFrame(frameId: string): Promise<void> {
         await selectFrame(this._ctx, frameId);
     }
@@ -261,16 +278,29 @@ export class SereneSession {
                     const autoplay = this._pendingAutoplay;
                     this._pendingAutoplay = false;
                     this._postScore(autoplay);
+                    if (this._pendingSeek !== null && !autoplay) {
+                        postToPanel(this._ctx, { type: "seek", t: this._pendingSeek });
+                    }
                 }
+                this._pendingSeek = null;
                 return;
             case "started":
                 this._pendingAutoplay = false;
+                this._pendingSeek = null;
                 this._playing = true;
                 this._overlay.setActive(this._frameIds[0] ?? null, true);
                 return;
             case "progress":
                 if (this._score && this._score.durationSec > 0) {
-                    this._overlay.setProgress(message.t / this._score.durationSec);
+                    const progress = message.t / this._score.durationSec;
+                    if (!this._playing) {
+                        // Stop and end clear the playhead themselves; a fresh score's
+                        // 0 would only flash it back before a seek lands.
+                        if (progress === 0 || !this._frameIds[0]) return;
+                        // A paused position (after a seek, say) holds the playhead there.
+                        this._overlay.setActive(this._frameIds[0], false);
+                    }
+                    this._overlay.setProgress(progress);
                 }
                 return;
             case "paused":
@@ -323,15 +353,40 @@ export class SereneSession {
                 return;
             case "scale": {
                 const scale = getScale(message.value).id;
-                this._updateSettings({ scale });
+                // Each scale has its own progressions; keep the choice in range.
+                this._updateSettings({
+                    scale,
+                    backing: sanitizeBacking(this._settings.backing, scale, this._settings.backing),
+                });
+                this.postBacking();
                 if (!this._rect) return;
                 this._rebuild();
                 this._postScore(false, true);
                 return;
             }
+            case "preview-backing": {
+                const style = BACKING_STYLES.find((s) => s.id === message.style)?.id;
+                if (!style) return;
+                const notes = backingPreview(getScale(this._settings.scale), {
+                    ...this._settings.backing,
+                    style,
+                }).map((hit) => ({
+                    t: hit.startSec,
+                    d: hit.durationSec,
+                    midi: hit.midi,
+                    v: hit.velocity,
+                    a: hit.arp,
+                }));
+                postToPanel(this._ctx, { type: "backing-preview", style, notes });
+                return;
+            }
             case "backing":
                 this._updateSettings({
-                    backing: sanitizeBacking(message.value, this._settings.backing),
+                    backing: sanitizeBacking(
+                        message.value,
+                        this._settings.scale,
+                        this._settings.backing
+                    ),
                 });
                 if (!this._rect) return;
                 this._rebuild();
@@ -347,9 +402,7 @@ export class SereneSession {
             scale: this._settings.scale,
             lowOctave: this._settings.lowOctave,
             highOctave: this._settings.highOctave,
-            backing: this._settings.backing.enabled
-                ? { progression: this._settings.backing.progression, voicing: "full", rhythm: 1 }
-                : null,
+            backing: this._settings.backing.enabled ? this._settings.backing : null,
         });
     }
 

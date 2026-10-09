@@ -29,6 +29,7 @@ export const PANEL_HTML = `<!doctype html>
     --ring: var(--drawdy-ring, #b3e000);
     --key-white: var(--surface);
     --key-black: #71717a;
+    --grip: #ffffff;
     --tooltip-bg: #52525b;
     --tooltip-fg: #fff;
     --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.1);
@@ -46,7 +47,6 @@ export const PANEL_HTML = `<!doctype html>
     --row-selected: rgb(255 255 255 / 0.04);
     --mark: rgb(255 255 255 / 0.1);
     --accent-subtle: rgb(179 224 0 / 0.1);
-    --key-black: rgb(255 255 255 / 0.81);
     --tooltip-bg: #3f3f46;
     --pop-shadow: 0 4px 20px rgb(0 0 0 / 0.4);
 }
@@ -69,6 +69,10 @@ main {
     height: 100%;
     overflow-y: auto;
     padding: 16px;
+    /* The scrollbar's room is always reserved and taken out of the right
+       padding, so content keeps its width whether or not the panel scrolls. */
+    padding-right: var(--scroll-pad, 16px);
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: var(--mark) transparent;
 }
@@ -178,10 +182,20 @@ main {
     width: calc(100% / 50 * 0.64);
     transform: translateX(-50%);
     background: var(--key-black);
-    border-radius: 0 0 1.5px 1.5px;
-    transition: box-shadow 120ms var(--ease);
 }
-.key.black.in-range { box-shadow: inset 0 -2px 0 var(--accent); }
+/* In range: a flat accent bar across the key's square bottom edge. */
+.key.black::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 120ms var(--ease);
+}
+.key.black.in-range::after { opacity: 1; }
 .band {
     position: absolute;
     z-index: 2;
@@ -217,7 +231,7 @@ main {
     height: 20px;
     margin-top: -8px;
     border-radius: 6px;
-    background: var(--surface);
+    background: var(--grip);
     box-shadow: 0 0 0 1px var(--border), var(--grip-shadow);
     transition: transform 120ms var(--ease);
 }
@@ -477,7 +491,6 @@ button.section-head { cursor: pointer; }
     0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
     50% { box-shadow: 0 0 0 5px var(--accent-subtle); }
 }
-.footer { margin: 4px 0 0; color: var(--fg-3); }
 
 /* First use */
 .first-use {
@@ -561,6 +574,16 @@ button.section-head { cursor: pointer; }
         <div class="segmented" id="backing" role="radiogroup" aria-labelledby="backing-label"></div>
     </div>
 
+    <div class="field" id="voicing-field" hidden>
+        <span class="label" id="voicing-label">Voicing</span>
+        <div class="segmented" id="voicing" role="radiogroup" aria-labelledby="voicing-label"></div>
+    </div>
+
+    <div class="field" id="rhythm-field" hidden>
+        <span class="label" id="rhythm-label">Rhythm</span>
+        <div class="segmented" id="rhythm" role="radiogroup" aria-labelledby="rhythm-label"></div>
+    </div>
+
     <hr class="divider" />
 
     <section class="feel" id="feel">
@@ -586,7 +609,6 @@ button.section-head { cursor: pointer; }
         <ul class="frame-list" id="frame-list"></ul>
     </section>
 
-    <p class="footer">Changes apply to all Serene frames.</p>
 </div>
 
 <div class="first-use" id="first-use" hidden>
@@ -603,12 +625,10 @@ button.section-head { cursor: pointer; }
     var root = document.documentElement;
     var themeStyle = document.getElementById("theme");
 
-    var BASE_PX_PER_SECOND = 200;
+    var BASE_PX_PER_SECOND = 220;
     var MIN_OCTAVE = 1;
     var MAX_OCTAVE = 8;
     var WHITE_KEYS = 50;
-    var NOTES_LEVEL = 0.8;
-    var BACKING_LEVEL = 0.7;
     var THUMB_WIDTH = 160;
     var PLAY_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6L9.8 6z"/></svg>';
     var PAUSE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 2.5h2v7H3zM7 2.5h2v7H7z"/></svg>';
@@ -616,13 +636,14 @@ button.section-head { cursor: pointer; }
     var settings = {
         speed: 1,
         attack: 0.02,
-        volume: 0.7,
-        reverb: 0.3,
+        notes: 0.8,
+        backingLevel: 0.7,
+        reverb: 0.38,
         scale: "major-pentatonic",
-        lowOctave: 3,
-        highOctave: 6,
+        lowOctave: 4,
+        highOctave: 7,
         loop: false,
-        backing: { enabled: false, progression: 0 },
+        backing: { enabled: false, style: "pop", voicing: "full", rhythm: 1 },
     };
     var attentionId = null;
 
@@ -694,7 +715,7 @@ button.section-head { cursor: pointer; }
         if (!Ctor) return null;
         var ctx = new Ctor();
         var master = ctx.createGain();
-        master.gain.value = settings.volume;
+        master.gain.value = 1;
         master.connect(ctx.destination);
         var trim = ctx.createGain();
         trim.gain.value = LIMIT_TRIM;
@@ -847,8 +868,8 @@ button.section-head { cursor: pointer; }
             0.0005,
             note.v * PEAK_GAIN * tilt(meanHz(note.pitches))
         );
-        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * BACKING_LEVEL;
-        else peak *= NOTES_LEVEL;
+        if (note.b) peak *= (note.a ? ARP_GAIN : BACKING_GAIN) * settings.backingLevel;
+        else peak *= settings.notes;
         var sustainRatio = note.a ? ARP_SUSTAIN : note.b ? BACKING_SUSTAIN : SUSTAIN_RATIO;
         var sustain = Math.max(0.0004, peak * sustainRatio);
         var end = Math.max(now, at + holdFor(note));
@@ -1189,6 +1210,24 @@ button.section-head { cursor: pointer; }
         resumeAudio();
     }
 
+    // Browsers only let the panel start sound from a click or key press inside
+    // it, so any of them starts the audio, whatever was pressed.
+    document.addEventListener("pointerdown", unlockAudio, true);
+    document.addEventListener("keydown", unlockAudio, true);
+
+    /**
+     * Runs "play" once sound is allowed. Hover is not a gesture, so this asks
+     * the browser to start audio and plays only if it agrees: after a click in
+     * the panel, or when the host lets the panel autoplay.
+     */
+    function whenAudible(play) {
+        if (audioUnlocked()) {
+            play();
+            return;
+        }
+        resumeAudio().then(function (ok) { if (ok) play(); });
+    }
+
     // A short sine pluck at "at" (default now). The gain sits at 0 from
     // creation, so a pluck cancelled before it starts stays silent.
     function pluck(midi, at, level) {
@@ -1249,10 +1288,87 @@ button.section-head { cursor: pointer; }
 
     function scheduleScalePreview(index) {
         stopScalePreview();
-        scalePreviewTimer = setTimeout(function () {
-            scalePreviewTimer = null;
-            playScalePreview(scales[index]);
+        var timer = setTimeout(function () {
+            whenAudible(function () {
+                // Not if the list closed or moved on while audio was resuming.
+                if (scalePreviewTimer !== timer) return;
+                scalePreviewTimer = null;
+                playScalePreview(scales[index]);
+            });
         }, SCALE_PREVIEW_DELAY_MS);
+        scalePreviewTimer = timer;
+    }
+
+    // ---- Backing preview: resting on a style plays one pass of it
+
+    var BACKING_PREVIEW_DELAY_MS = 220;
+    var backingPreviewTimer = null;
+    var backingPreviewStyle = null;
+    var backingPreviewVoices = [];
+
+    function stopBackingPreview() {
+        clearTimeout(backingPreviewTimer);
+        backingPreviewTimer = null;
+        backingPreviewStyle = null;
+        if (audio) {
+            var now = audio.ctx.currentTime;
+            backingPreviewVoices.forEach(function (voice) {
+                holdParam(voice.gain.gain, now);
+                voice.gain.gain.setTargetAtTime(0.0001, now, 0.03);
+                voice.osc.stop(now + 0.2);
+            });
+        }
+        backingPreviewVoices = [];
+    }
+
+    // The driver voices the style in the current scale, voicing and rhythm.
+    function scheduleBackingPreview(style) {
+        stopBackingPreview();
+        backingPreviewStyle = style;
+        backingPreviewTimer = setTimeout(function () {
+            backingPreviewTimer = null;
+            api.postMessage({ type: "preview-backing", style: style });
+        }, BACKING_PREVIEW_DELAY_MS);
+    }
+
+    // Pad chords and arpeggio notes, shaped like the ones playback makes.
+    function playBackingPreview(notes) {
+        if (!audioUnlocked()) return;
+        var ctx = audio.ctx;
+        var now = ctx.currentTime;
+        var start = now + 0.03;
+        backingPreviewVoices = notes.map(function (note) {
+            var at = start + note.t;
+            var hz = 440 * Math.pow(2, (note.midi - 69) / 12);
+            var peak = Math.max(0.0005, note.v * PEAK_GAIN * tilt(hz)) * (note.a ? ARP_GAIN : BACKING_GAIN) * settings.backingLevel;
+            var sustain = Math.max(0.0004, peak * (note.a ? ARP_SUSTAIN : BACKING_SUSTAIN));
+            var attack = note.a ? ARP_ATTACK : note.d >= BACKING_PAD_MIN_SEC ? BACKING_PAD_ATTACK : BACKING_PLUCK_ATTACK;
+            var end = at + Math.max(0.09, note.d);
+            var osc = ctx.createOscillator();
+            osc.type = note.a ? "sine" : "triangle";
+            osc.frequency.value = hz;
+            var gain = ctx.createGain();
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.setValueAtTime(0, at);
+            gain.gain.linearRampToValueAtTime(peak, at + attack);
+            gain.gain.setTargetAtTime(sustain, at + attack, DECAY / 3);
+            gain.gain.setTargetAtTime(0.0001, end, RELEASE / 3);
+            var source = osc;
+            if (!note.a) {
+                var cutoff = ctx.createBiquadFilter();
+                cutoff.type = "lowpass";
+                cutoff.frequency.value = BACKING_CUTOFF;
+                cutoff.Q.value = 0.6;
+                osc.connect(cutoff);
+                source = cutoff;
+            }
+            source.connect(gain);
+            gain.connect(audio.dry);
+            gain.connect(audio.send);
+            osc.start(now);
+            osc.stop(end + RELEASE * 3);
+            return { osc: osc, gain: gain };
+        });
     }
 
     // ---- Tooltip
@@ -1289,106 +1405,127 @@ button.section-head { cursor: pointer; }
         el.addEventListener("blur", function () { hideTip(el); });
     }
 
-    // ---- Scale select
+    // ---- Dropdowns (Scale, Backing)
 
-    var scaleField = document.getElementById("scale-field");
-    var scaleTrigger = document.getElementById("scale-trigger");
-    var scaleValue = document.getElementById("scale-value");
-    var scaleList = document.getElementById("scale-list");
-    var scales = [];
-    var activeOption = -1;
+    var CHECK_ICON = '<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
 
-    function selectedScaleIndex() {
-        for (var i = 0; i < scales.length; i++) if (scales[i].id === settings.scale) return i;
-        return 0;
-    }
+    /**
+     * A listbox dropdown. "items()" returns { name, description? }, "selected()"
+     * the chosen index, "choose(index)" applies a new choice. "preview(index)" runs
+     * when the user moves onto an option, "stopPreview()" when the list closes.
+     */
+    function createSelect(opts) {
+        var field = document.getElementById(opts.id + "-field");
+        var trigger = document.getElementById(opts.id + "-trigger");
+        var valueEl = document.getElementById(opts.id + "-value");
+        var list = document.getElementById(opts.id + "-list");
+        var active = -1;
 
-    function renderScales() {
-        scaleList.textContent = "";
-        scales.forEach(function (scale, index) {
-            var option = document.createElement("div");
-            option.className = "option";
-            option.id = "scale-option-" + index;
-            option.setAttribute("role", "option");
-            option.setAttribute("aria-selected", scale.id === settings.scale ? "true" : "false");
-            option.innerHTML =
-                '<span class="option-text"><span class="option-name"></span><span class="option-desc"></span></span>' +
-                '<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
-            option.querySelector(".option-name").textContent = scale.name;
-            option.querySelector(".option-desc").textContent = scale.description;
-            option.addEventListener("pointermove", function () { setActiveOption(index, true); });
-            option.addEventListener("click", function () { chooseScale(index); });
-            scaleList.appendChild(option);
+        function render() {
+            list.textContent = "";
+            var items = opts.items();
+            var selected = opts.selected();
+            items.forEach(function (item, index) {
+                var option = document.createElement("div");
+                option.className = "option";
+                option.id = opts.id + "-option-" + index;
+                option.setAttribute("role", "option");
+                option.setAttribute("aria-selected", index === selected ? "true" : "false");
+                option.innerHTML =
+                    '<span class="option-text"><span class="option-name"></span><span class="option-desc"></span></span>' +
+                    CHECK_ICON;
+                option.querySelector(".option-name").textContent = item.name;
+                var desc = option.querySelector(".option-desc");
+                if (item.description) desc.textContent = item.description;
+                else desc.remove();
+                option.addEventListener("pointermove", function () { setActive(index, true); });
+                option.addEventListener("click", function () { choose(index); });
+                list.appendChild(option);
+            });
+            var current = items[selected];
+            valueEl.textContent = current ? current.name : "";
+        }
+
+        function setActive(index, fromUser) {
+            if (index === active) return;
+            active = index;
+            if (fromUser && opts.preview) opts.preview(index);
+            var options = list.children;
+            for (var i = 0; i < options.length; i++) options[i].classList.toggle("active", i === index);
+            if (options[index]) list.setAttribute("aria-activedescendant", options[index].id);
+        }
+
+        function open() {
+            if (!opts.items().length) return;
+            // Opening is a click or key press in the panel, so sound may start here.
+            unlockAudio();
+            list.hidden = false;
+            trigger.setAttribute("aria-expanded", "true");
+            active = -1;
+            setActive(opts.selected(), false);
+            list.focus({ preventScroll: true });
+        }
+
+        function close(refocus) {
+            if (list.hidden) return;
+            if (opts.stopPreview) opts.stopPreview();
+            list.hidden = true;
+            trigger.setAttribute("aria-expanded", "false");
+            if (refocus) trigger.focus({ preventScroll: true });
+        }
+
+        function choose(index) {
+            close(true);
+            if (index === opts.selected() || !opts.items()[index]) return;
+            opts.choose(index);
+            render();
+        }
+
+        trigger.addEventListener("click", function () {
+            if (list.hidden) open();
+            else close(false);
         });
-        var current = scales[selectedScaleIndex()];
-        scaleValue.textContent = current ? current.name : "";
+        trigger.addEventListener("keydown", function (event) {
+            if (["ArrowDown", "ArrowUp", "Enter", " "].indexOf(event.key) < 0) return;
+            event.preventDefault();
+            open();
+        });
+        list.addEventListener("keydown", function (event) {
+            var last = opts.items().length - 1;
+            switch (event.key) {
+                case "ArrowDown": setActive(Math.min(last, active + 1), true); break;
+                case "ArrowUp": setActive(Math.max(0, active - 1), true); break;
+                case "Home": setActive(0, true); break;
+                case "End": setActive(last, true); break;
+                case "Enter":
+                case " ": choose(active); break;
+                case "Escape": close(true); break;
+                case "Tab": close(false); return;
+                default: return;
+            }
+            event.preventDefault();
+        });
+        document.addEventListener("pointerdown", function (event) {
+            if (!field.contains(event.target)) close(false);
+        });
+        return { render: render };
     }
 
-    function setActiveOption(index, preview) {
-        if (index === activeOption) return;
-        activeOption = index;
-        if (preview) scheduleScalePreview(index);
-        var options = scaleList.children;
-        for (var i = 0; i < options.length; i++) {
-            options[i].classList.toggle("active", i === index);
-        }
-        if (options[index]) scaleList.setAttribute("aria-activedescendant", options[index].id);
-    }
+    var scales = [];
 
-    function openSelect() {
-        if (!scales.length) return;
-        // Opening is a click or key press in the panel, so sound may start here.
-        unlockAudio();
-        scaleList.hidden = false;
-        scaleTrigger.setAttribute("aria-expanded", "true");
-        activeOption = -1;
-        setActiveOption(selectedScaleIndex());
-        scaleList.focus({ preventScroll: true });
-    }
-
-    function closeSelect(refocus) {
-        if (scaleList.hidden) return;
-        stopScalePreview();
-        scaleList.hidden = true;
-        scaleTrigger.setAttribute("aria-expanded", "false");
-        if (refocus) scaleTrigger.focus({ preventScroll: true });
-    }
-
-    function chooseScale(index) {
-        var scale = scales[index];
-        closeSelect(true);
-        if (!scale || scale.id === settings.scale) return;
-        settings.scale = scale.id;
-        renderScales();
-        api.postMessage({ type: "scale", value: scale.id });
-    }
-
-    scaleTrigger.addEventListener("click", function () {
-        if (scaleList.hidden) openSelect();
-        else closeSelect(false);
-    });
-    scaleTrigger.addEventListener("keydown", function (event) {
-        if (["ArrowDown", "ArrowUp", "Enter", " "].indexOf(event.key) < 0) return;
-        event.preventDefault();
-        openSelect();
-    });
-    scaleList.addEventListener("keydown", function (event) {
-        var last = scales.length - 1;
-        switch (event.key) {
-            case "ArrowDown": setActiveOption(Math.min(last, activeOption + 1), true); break;
-            case "ArrowUp": setActiveOption(Math.max(0, activeOption - 1), true); break;
-            case "Home": setActiveOption(0, true); break;
-            case "End": setActiveOption(last, true); break;
-            case "Enter":
-            case " ": chooseScale(activeOption); break;
-            case "Escape": closeSelect(true); break;
-            case "Tab": closeSelect(false); return;
-            default: return;
-        }
-        event.preventDefault();
-    });
-    document.addEventListener("pointerdown", function (event) {
-        if (!scaleField.contains(event.target)) closeSelect(false);
+    var scaleSelect = createSelect({
+        id: "scale",
+        items: function () { return scales; },
+        selected: function () {
+            for (var i = 0; i < scales.length; i++) if (scales[i].id === settings.scale) return i;
+            return 0;
+        },
+        choose: function (index) {
+            settings.scale = scales[index].id;
+            api.postMessage({ type: "scale", value: settings.scale });
+        },
+        preview: function (index) { scheduleScalePreview(index); },
+        stopPreview: function () { stopScalePreview(); },
     });
 
     // ---- Range piano
@@ -1555,58 +1692,80 @@ button.section-head { cursor: pointer; }
         });
     });
 
-    // ---- Backing segmented control
+    // ---- Backing: named styles, each the current scale's own progression
 
+    var backingStyles = [];
     var backingEl = document.getElementById("backing");
-    var backingOptions = [];
 
-    function backingIndex() {
-        return settings.backing.enabled ? settings.backing.progression : -1;
+    function isArp(rhythm) {
+        return typeof rhythm === "string";
     }
 
-    function renderBacking() {
-        backingEl.textContent = "";
-        var items = [{ name: "Off", tip: "No backing chords", index: -1 }].concat(
-            backingOptions.map(function (option, index) {
-                return { name: option.name, tip: "Chords " + option.progression, index: index };
+    function setBacking(patch) {
+        var next = {};
+        for (var key in settings.backing) next[key] = settings.backing[key];
+        for (var key2 in patch) next[key2] = patch[key2];
+        settings.backing = next;
+        renderBackingRows();
+        api.postMessage({ type: "backing", value: settings.backing });
+    }
+
+    function backingItems() {
+        return [{ value: "off", label: "Off", tip: "No backing chords", disabled: false }].concat(
+            backingStyles.map(function (style) {
+                return {
+                    value: style.id,
+                    label: style.label,
+                    tip: style.progression ? "Chords " + style.progression : "Not in this scale",
+                    disabled: !style.progression,
+                };
             })
         );
-        items.forEach(function (item) {
+    }
+
+    function currentBacking() {
+        return settings.backing.enabled ? settings.backing.style : "off";
+    }
+
+    function chooseBacking(value) {
+        if (value === currentBacking()) return;
+        if (value === "off") setBacking({ enabled: false });
+        else setBacking({ enabled: true, style: value });
+    }
+
+    // Rebuilt when the scale changes, since the scale decides which styles exist.
+    function renderBackingTabs() {
+        backingEl.textContent = "";
+        backingItems().forEach(function (item) {
             var button = document.createElement("button");
             button.type = "button";
             button.className = "segment";
             button.setAttribute("role", "radio");
-            button.dataset.index = String(item.index);
-            button.dataset.tip = item.tip;
-            button.textContent = item.name;
-            button.addEventListener("click", function () { chooseBacking(item.index); });
+            button.dataset.value = item.value;
+            button.textContent = item.label;
+            button.disabled = item.disabled;
+            button.addEventListener("click", function () { chooseBacking(item.value); });
+            if (item.value !== "off" && !item.disabled) {
+                button.addEventListener("pointerenter", function () { scheduleBackingPreview(item.value); });
+                button.addEventListener("pointerleave", stopBackingPreview);
+            }
             bindTip(button, function () { return item.tip; });
             backingEl.appendChild(button);
         });
-        updateBacking();
+        updateBackingTabs();
     }
 
-    function updateBacking() {
-        var current = backingIndex();
+    function updateBackingTabs() {
+        var value = currentBacking();
         Array.prototype.forEach.call(backingEl.children, function (button) {
-            var on = Number(button.dataset.index) === current;
+            var on = button.dataset.value === value;
             button.setAttribute("aria-checked", on ? "true" : "false");
             button.tabIndex = on ? 0 : -1;
         });
     }
 
-    function chooseBacking(index) {
-        if (index === backingIndex()) return;
-        settings.backing =
-            index < 0
-                ? { enabled: false, progression: settings.backing.progression }
-                : { enabled: true, progression: index };
-        updateBacking();
-        api.postMessage({ type: "backing", value: settings.backing });
-    }
-
     backingEl.addEventListener("keydown", function (event) {
-        var buttons = Array.prototype.slice.call(backingEl.children);
+        var buttons = Array.prototype.slice.call(backingEl.children).filter(function (b) { return !b.disabled; });
         var at = buttons.indexOf(document.activeElement);
         if (at < 0) return;
         var next;
@@ -1620,10 +1779,94 @@ button.section-head { cursor: pointer; }
             default: return;
         }
         event.preventDefault();
-        chooseBacking(Number(buttons[next].dataset.index));
+        chooseBacking(buttons[next].dataset.value);
         buttons[next].focus();
-        showTip(buttons[next], buttons[next].dataset.tip);
+        var item = backingItems().filter(function (i) { return i.value === buttons[next].dataset.value; })[0];
+        if (item) showTip(buttons[next], item.tip);
     });
+
+    /** A row of segments; "items" are { value, label, tip }. */
+    function createSegmented(id, items, current, choose) {
+        var el = document.getElementById(id);
+        items.forEach(function (item, index) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "segment";
+            button.setAttribute("role", "radio");
+            button.dataset.index = String(index);
+            button.textContent = item.label;
+            button.addEventListener("click", function () { choose(item.value); });
+            bindTip(button, function () { return item.tip; });
+            el.appendChild(button);
+        });
+        el.addEventListener("keydown", function (event) {
+            var buttons = Array.prototype.slice.call(el.children);
+            var at = buttons.indexOf(document.activeElement);
+            if (at < 0) return;
+            var next;
+            switch (event.key) {
+                case "ArrowLeft":
+                case "ArrowUp": next = (at - 1 + buttons.length) % buttons.length; break;
+                case "ArrowRight":
+                case "ArrowDown": next = (at + 1) % buttons.length; break;
+                case "Home": next = 0; break;
+                case "End": next = buttons.length - 1; break;
+                default: return;
+            }
+            event.preventDefault();
+            choose(items[next].value);
+            buttons[next].focus();
+            showTip(buttons[next], items[next].tip);
+        });
+        return {
+            render: function () {
+                var value = current();
+                Array.prototype.forEach.call(el.children, function (button, index) {
+                    var on = items[index].value === value;
+                    button.setAttribute("aria-checked", on ? "true" : "false");
+                    button.tabIndex = on ? 0 : -1;
+                });
+            },
+        };
+    }
+
+    var voicingControl = createSegmented(
+        "voicing",
+        [
+            { value: "bass", label: "Bass", tip: "Bass note only" },
+            { value: "omit3", label: "No 3rd", tip: "Bass, root and fifth" },
+            { value: "full", label: "Full", tip: "Bass and the full triad" },
+        ],
+        function () { return settings.backing.voicing; },
+        function (value) { if (value !== settings.backing.voicing) setBacking({ voicing: value }); }
+    );
+
+    var rhythmControl = createSegmented(
+        "rhythm",
+        [
+            { value: 1, label: "1\u00d7", tip: "One strike per chord" },
+            { value: 2, label: "2\u00d7", tip: "Two strikes per chord" },
+            { value: 4, label: "4\u00d7", tip: "Four strikes per chord" },
+            { value: "arp-up", label: "Arp \\u2191", tip: "Arpeggio up over a held bass" },
+            { value: "arp-down", label: "Arp \\u2193", tip: "Arpeggio down over a held bass" },
+        ],
+        function () { return settings.backing.rhythm; },
+        function (value) { if (value !== settings.backing.rhythm) setBacking({ rhythm: value }); }
+    );
+
+    var voicingField = document.getElementById("voicing-field");
+    var rhythmField = document.getElementById("rhythm-field");
+
+    // Voicing and Rhythm only matter with a backing on; arpeggios set their own voicing.
+    function renderBackingRows() {
+        updateBackingTabs();
+        var on = settings.backing.enabled;
+        rhythmField.hidden = !on;
+        voicingField.hidden = !on || isArp(settings.backing.rhythm);
+        voicingControl.render();
+        rhythmControl.render();
+        showBackingLevel(on);
+    }
 
     // ---- Feel
 
@@ -1654,9 +1897,10 @@ button.section-head { cursor: pointer; }
 
     var SLIDERS = [
         { key: "speed", label: "Speed", min: 0.5, max: 2, step: 0.05, def: 1, marks: "ticks", widest: "0.55\u00d7", format: formatSpeed },
-        { key: "attack", label: "Attack", min: 0, max: 1, step: 0.01, def: 0.02, marks: "dots", widest: "1000ms", format: formatMs, hint: "Lower is sharper, higher is softer" },
-        { key: "volume", label: "Volume", min: 0, max: 1, step: 0.01, def: 0.7, marks: "dots", widest: "100%", format: formatPercent },
-        { key: "reverb", label: "Reverb", min: 0, max: 1, step: 0.01, def: 0.3, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "attack", label: "Attack", min: 0, max: 0.3, step: 0.005, def: 0.02, marks: "dots", widest: "300ms", format: formatMs, hint: "Lower is sharper, higher is softer" },
+        { key: "notes", label: "Notes", min: 0, max: 1, step: 0.01, def: 0.8, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "backingLevel", label: "Backing", min: 0, max: 1, step: 0.01, def: 0.7, marks: "dots", widest: "100%", format: formatPercent },
+        { key: "reverb", label: "Reverb", min: 0, max: 1, step: 0.01, def: 0.38, marks: "dots", widest: "100%", format: formatPercent },
     ];
 
     function quantize(spec, raw) {
@@ -1681,7 +1925,6 @@ button.section-head { cursor: pointer; }
         }
         if (!audio) return;
         var now = audio.ctx.currentTime;
-        if (key === "volume") audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
         if (key === "reverb") audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
     }
 
@@ -1692,13 +1935,18 @@ button.section-head { cursor: pointer; }
         }
         api.postMessage({
             type: "knobs",
-            values: { attack: settings.attack, volume: settings.volume, reverb: settings.reverb },
+            values: {
+                attack: settings.attack,
+                notes: settings.notes,
+                backingLevel: settings.backingLevel,
+                reverb: settings.reverb,
+            },
         });
     }
 
     function renderSummary() {
         feelSummary.textContent =
-            settings.speed.toFixed(2) + "\u00d7 \u00b7 " + formatMs(settings.attack) + " \u00b7 " + formatPercent(settings.volume);
+            settings.speed.toFixed(2) + "\u00d7 \u00b7 " + formatMs(settings.attack) + " \u00b7 " + formatPercent(settings.notes);
     }
 
     function measureText(text) {
@@ -1888,6 +2136,16 @@ button.section-head { cursor: pointer; }
     }
 
     var sliders = SLIDERS.map(buildSlider);
+    showBackingLevel(settings.backing.enabled);
+
+    // The Backing level slider only shows while a backing is on.
+    function showBackingLevel(on) {
+        sliders.forEach(function (slider) {
+            if (slider.spec.key !== "backingLevel") return;
+            slider.el.hidden = !on;
+            if (on) layoutSlider(slider);
+        });
+    }
 
     function layoutSliders() {
         sliders.forEach(layoutSlider);
@@ -1909,6 +2167,15 @@ button.section-head { cursor: pointer; }
     });
 
     if (window.ResizeObserver) new ResizeObserver(layoutSliders).observe(slidersEl);
+
+    // Keep 16px of space on the right whether the scrollbar takes room or overlays.
+    var mainEl = document.querySelector("main");
+    function fitScrollGutter() {
+        var gutter = mainEl.offsetWidth - mainEl.clientWidth;
+        root.style.setProperty("--scroll-pad", Math.max(0, 16 - gutter) + "px");
+    }
+    fitScrollGutter();
+    window.addEventListener("resize", fitScrollGutter);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutSliders);
 
     // ---- Frames
@@ -2151,7 +2418,7 @@ button.section-head { cursor: pointer; }
     // ---- Settings from the driver
 
     function applySettings(values) {
-        ["speed", "attack", "volume", "reverb"].forEach(function (key) {
+        ["speed", "attack", "notes", "backingLevel", "reverb"].forEach(function (key) {
             if (typeof values[key] === "number") settings[key] = values[key];
         });
         if (typeof values.scale === "string") settings.scale = values.scale;
@@ -2161,14 +2428,13 @@ button.section-head { cursor: pointer; }
         }
         if (values.backing && typeof values.backing === "object") settings.backing = values.backing;
         if (typeof values.loop === "boolean") setLoop(values.loop);
-        renderScales();
+        scaleSelect.render();
         renderRange();
-        updateBacking();
+        renderBackingRows();
         renderSliders();
         renderRowStates();
         if (audio) {
             var now = audio.ctx.currentTime;
-            audio.master.gain.setTargetAtTime(settings.volume, now, 0.02);
             audio.wet.gain.setTargetAtTime(settings.reverb, now, 0.02);
         }
     }
@@ -2228,15 +2494,23 @@ button.section-head { cursor: pointer; }
             case "seek":
                 seekTo(msg.t);
                 return;
+            case "backing-preview":
+                // Only if the pointer is still resting on that style.
+                whenAudible(function () {
+                    if (msg.style === backingPreviewStyle) playBackingPreview(msg.notes);
+                });
+                return;
             case "backing":
-                backingOptions = msg.options;
+                stopBackingPreview();
+                backingStyles = msg.styles;
                 settings.backing = msg.value;
-                renderBacking();
+                renderBackingTabs();
+                renderBackingRows();
                 return;
             case "scales":
                 scales = msg.scales;
                 settings.scale = msg.current;
-                renderScales();
+                scaleSelect.render();
                 return;
             case "score":
                 receiveScore(msg);

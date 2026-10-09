@@ -10,8 +10,8 @@ across the frame at a constant rate — a wider region
 takes proportionally longer — and every stroke it crosses rings out as a sine
 tone with a short, tunable attack, then decaying into a long reverb tail.
 
-Pitch comes from height: by default the bottom of the region is **C3** and the
-top is **C6**, and the panel's **Range** keyboard lets you drag either end to
+Pitch comes from height: by default the bottom of the region is **C4** and the
+top is **C7**, and the panel's **Range** keyboard lets you drag either end to
 any C from C1 to C8, at least an octave apart. Everything between snaps to a rung of the chosen scale, so nothing lands on
 an interval you did not ask for no matter what you drew.
 
@@ -20,15 +20,13 @@ an interval you did not ask for no matter what you drew.
 Pick one in the panel. Every scale spans the same octave range, so switching
 changes the colour and the number of rungs, never the range.
 
-| Scale | Degrees | Rows (C3 to C6) |
+| Scale | Degrees | Rows (C4 to C7) |
 | --- | --- | --- |
 | Major pentatonic (default) | C D E G A | 16 |
 | Major | C D E F G A B | 22 |
 | Dorian | C D E&#9837; F G A B&#9837; | 22 |
 | Lydian | C D E F&#9839; G A B | 22 |
 | Mixolydian | C D E F G A B&#9837; | 22 |
-| Minor pentatonic | C E&#9837; F G B&#9837; | 16 |
-| Phrygian | C D&#9837; E&#9837; F G A&#9837; B&#9837; | 22 |
 | Hirajoshi | C D E&#9837; G A&#9837; | 16 |
 
 A seven-note scale gives the playhead more rungs to cross in the same height,
@@ -67,11 +65,16 @@ dragged in the panel (and for 600 ms after), it shows its guides:
 - a time ruler along the top edge, with a tick every 0.5 s of playback time
   (Speed applied) and whole seconds longer and labeled (`1s`, `2s`); labels
   thin out when zoomed far out and stop 20 px short of the right edge;
-- a label for each C in the Range at the height that C plays (`C3`, `C4`),
+- a label for each C in the Range at the height that C plays (`C4`, `C5`),
   kept clear of the ruler and the bottom edge.
 
 The playhead is a line with a pill-shaped handle straddling the top edge. It
 shows on a hovered, selected or active frame and is dimmed at 0 when idle.
+Drag the handle to move it: the playhead follows the pointer and playback
+jumps there when you let go, whether the frame is playing or paused; on
+another frame, that frame is loaded and starts from there on the next play.
+The handle is a hit-testable preview, and a large invisible one covers the
+view while dragging so the drag never selects or draws on the board.
 An empty frame says "Draw anywhere, then press play."
 
 All of it is preview elements, so it pans and zooms with the board and stays
@@ -132,14 +135,35 @@ thinned to `maxVoices`, keeping the outermost ones so a chord keeps its shape.
 
 ## Backing track
 
-The panel's **Backing** control adds a chord progression under the drawing,
-played by a soft triangle pad as full triads: **Pop** (I vi IV V), **Classic**
-(I iii IV V), **Simple** (I V) or **Drone** (I). The same four are offered in
-every scale and built diatonically from it, so chord qualities follow the
-mode: Pop in dorian is i vi&deg; IV v. Five-note scales borrow the seven-note
-scale that contains them for harmony: major pentatonic uses major, minor
-pentatonic and hirajoshi use natural minor. The bass sits around C2 and the
-chord tones in the C3 octave regardless of the melodic range.
+The panel's **Backing** tabs add a chord progression under the drawing, played
+by a soft triangle pad (or plucks when a chord is struck more than once). Pick a
+style, then a **Voicing** (Bass: bass only; No
+3rd: bass plus root and fifth; Full: the full triad) and a **Rhythm**, which
+appear under it while a backing is on. Balance it against the drawing with the
+**Notes** and **Backing** sliders under Feel. Rhythm is 1×, 2× or 4× strikes per chord (a single sustained chord is held
+for 85% of its slot so chords breathe), or an arpeggio over a sustained bass (Voicing is hidden then). **Arp ↑** runs 1 3 5 1' 3' 5 3 1 through the
+triad and its octave, **Arp ↓** is the mirror image starting from the top, and
+either pattern plays twice per chord in double time. Arpeggio notes are plain
+sines struck with a near-instant attack. The bass sits around C2 and the chord
+tones in the C3 octave regardless of the melodic range.
+
+Each style plays the current scale's own progression of that kind, built
+diatonically from the scale so chord qualities follow the mode. A style the
+scale has no progression for is disabled, and its tooltip shows the chords:
+
+| Scale | Pop | Classic | Simple | Drone |
+| --- | --- | --- | --- | --- |
+| Major, major pentatonic | I vi IV V | I iii IV V | I V | I |
+| Dorian | i III IV | i III/6 IV/6 | i IV | i |
+| Lydian | I II V | | I II | I |
+| Mixolydian | | I vii | I v | I |
+| Hirajoshi | | | | I |
+
+Dorian's **i III/6 IV/6** uses first inversions whose bass walks down from the
+tonic (C, G below, A); mixolydian's vii bass steps down to the B♭ below the
+tonic rather than up. The major pentatonic is harmonised from the full major
+scale. Switching scale keeps the style when the new scale has it, and moves
+to the first style it does have otherwise.
 
 The backing is locked to the sweep. A frame up to about 1000 px wide plays the
 progression once across its duration; every further 1000 px adds another pass
@@ -152,22 +176,27 @@ the score, they follow speed changes, seeks and loops exactly like the ink.
 The panel holds the settings shared by every Serene frame, and the frames
 themselves:
 
-- **Scale**, with a one-line description of each.
+- **Scale**, with a one-line description of each; resting on an option plays
+  a short preview of it.
 - **Range**, a C1 to C8 keyboard with a handle at each end. Handles snap to C,
   stay an octave apart and play their note as they snap; clicking a key moves
   the nearer handle there. Arrow keys move a focused handle an octave.
-- **Backing**: Off, Pop, Classic, Simple, Drone.
+- **Backing**: Off, Pop, Classic, Simple or Drone, each the current scale's
+  own progression, with **Voicing** and **Rhythm** under it while a backing is
+  on (see Backing track). Resting on a style plays one pass of it in the
+  current scale, voicing and rhythm.
 - **Feel** (collapsed by default, with a summary): **Speed** 0.5&times; to
-  2.0&times; on a 200 px per second sweep, so a 960 px frame lasts 4.8 s at
-  1.0&times;; **Attack** 0 to 1000 ms; **Volume**, the output level; **Reverb**.
-  Double-click a slider to reset it.
+  2.0&times; on a 220 px per second sweep, so a 960 px frame lasts about 4.4 s
+  at 1.0&times;; **Attack** 0 to 300 ms; **Notes**, the level of the drawn
+  voices; **Backing**, the level of the backing (only while one is on);
+  **Reverb**. Double-click a slider to reset it.
 - **Frames**: a row per Serene frame with a thumbnail of its strokes, its
   duration at the current Speed and a play/pause button. Clicking a row selects
   the frame and fits the camera to it.
 
 Every setting is remembered in the driver's key/value storage, which is why
-the manifest asks for the `storage` permission. Settings saved before 1.5 are
-migrated: a speed in px per second becomes the nearest multiplier.
+the manifest asks for the `storage` permission. Settings saved before 1.4.1
+are migrated: a speed in px per second becomes the nearest multiplier.
 
 Dry and reverb sum into a mix bus that runs through a limiter before the volume
 control: a dense passage stacks five voices per column on top of the tails of

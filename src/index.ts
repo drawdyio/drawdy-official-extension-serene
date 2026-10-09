@@ -34,6 +34,16 @@ function subscribeClick(ctx: Ctx, domElementId: string): void {
         .catch(() => undefined);
 }
 
+function subscribePointer(ctx: Ctx, elementId: string): void {
+    void ctx
+        .issueCommand({
+            type: "subscription:scene:pointer",
+            ...stamp(ctx),
+            req: { elementIds: [elementId] },
+        })
+        .catch(() => undefined);
+}
+
 const DOUBLE_CLICK_MS = 400;
 let lastBarClick: { frameId: string; at: number } | null = null;
 
@@ -50,7 +60,12 @@ export const activate: DriverModule["activate"] = async ({
         generateId,
         nextRequestId: () => String(requestId++),
     };
-    const overlay = new FrameOverlay(ctx, styling, (domId) => subscribeClick(ctx, domId));
+    const overlay = new FrameOverlay(
+        ctx,
+        styling,
+        (domId) => subscribeClick(ctx, domId),
+        (elementId) => subscribePointer(ctx, elementId)
+    );
     const session = new SereneSession(ctx, overlay, styling);
     driver = { ctx, session, overlay, styling };
     await session.restoreSettings();
@@ -125,6 +140,29 @@ export const onEvent: DriverModule["onEvent"] = async (event) => {
         case "subscription:scene:pointer-position": {
             const { x, y } = event.body.position.canvasSpace;
             overlay.setPointer(x, y);
+            overlay.scrubTo(x);
+            return;
+        }
+        case "subscription:scene:pointer": {
+            // Dragging a playhead handle: it follows the pointer and playback
+            // jumps to where it is released.
+            const body = event.body;
+            if (body.type === "cancel") {
+                overlay.cancelScrub();
+                overlay.setHandleHover(null);
+                return;
+            }
+            const frameId = overlay.frameForHandle(body.drawdyElementIds);
+            if (body.type === "down") {
+                if (frameId) await overlay.beginScrub(frameId, body.cursor.canvasSpace.x);
+                return;
+            }
+            if (body.type === "up") {
+                const landed = overlay.endScrub();
+                if (landed) await session.seekFrame(landed.frameId, landed.progress);
+                return;
+            }
+            if (frameId) overlay.setHandleHover(body.type === "enter" ? frameId : null);
             return;
         }
         case "subscription:scene:drawdy-element-selection": {

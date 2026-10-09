@@ -4,8 +4,6 @@ export type ScaleId =
     | "dorian"
     | "lydian"
     | "mixolydian"
-    | "minor-pentatonic"
-    | "phrygian"
     | "japanese";
 
 export type Scale = {
@@ -19,7 +17,7 @@ export const SCALES: Scale[] = [
     {
         id: "major-pentatonic",
         name: "Major pentatonic",
-        description: "Bright",
+        description: "Bright, no wrong notes",
         steps: [0, 2, 4, 7, 9],
     },
     {
@@ -47,19 +45,6 @@ export const SCALES: Scale[] = [
         steps: [0, 2, 4, 5, 7, 9, 10],
     },
     {
-        id: "minor-pentatonic",
-        name: "Minor pentatonic",
-        description: "Moody",
-        steps: [0, 3, 5, 7, 10],
-    },
-    {
-        id: "phrygian",
-        name: "Phrygian",
-        description: "Dark and mysterious",
-        steps: [0, 1, 3, 5, 7, 8, 10],
-    },
-    {
-        // Kept as "japanese" so settings saved before the rename still load.
         id: "japanese",
         name: "Hirajoshi",
         description: "Calm and Japanese-inspired",
@@ -73,7 +58,7 @@ export type PitchRange = { lowOctave: number; highOctave: number };
 
 export const MIN_OCTAVE = 1;
 export const MAX_OCTAVE = 8;
-export const DEFAULT_RANGE: PitchRange = { lowOctave: 3, highOctave: 6 };
+export const DEFAULT_RANGE: PitchRange = { lowOctave: 4, highOctave: 7 };
 
 export function normalizeRange(
     lowOctave: unknown,

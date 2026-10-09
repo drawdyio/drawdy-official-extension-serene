@@ -24,6 +24,12 @@ const EMPTY_MIN_HEIGHT = 140;
 const IDLE_PLAYHEAD_OPACITY = 0.4;
 const TERTIARY_OPACITY = 0.5;
 const EMPTY_TEXT_HEIGHT = 24;
+// The playhead handle grows this much while hovered or dragged.
+const HANDLE_ACTIVE_SCALE = 1.25;
+// Pointer target around the handle, a little larger than the handle itself.
+const HANDLE_HIT = { width: 24, height: 30 };
+// How far past the visible area the drag shield reaches, in viewport sizes.
+const SHIELD_REACH = 1;
 // Text boxes at least this tall sit at their top whatever the host's line height.
 const LABEL_BOX = 24;
 
@@ -125,22 +131,31 @@ export class FrameOverlay {
     private _rangePreview: string | null = null;
     private _rangeTimer: ReturnType<typeof setTimeout> | null = null;
     private _dragging = false;
+    /** Dragging a playhead: shown where the pointer is, applied on release. */
+    private _scrub: { frameId: string; progress: number } | null = null;
+    private _shield: Rect | null = null;
+    private _handleHover: string | null = null;
     private _guides: PreviewBatch;
     private _labels: PreviewBatch;
     private _playheads: PreviewBatch;
+    private _hits: PreviewBatch;
     private _dirty = false;
     private _syncing = false;
     private _clickIds = new Set<string>();
+    private _pointerIds = new Set<string>();
 
     public constructor(
         private readonly _ctx: Ctx,
         private _styling: ModuleStyling,
         /** Asks for click events on a DOM id the overlay draws. */
-        private readonly _onClickTarget: (domId: string) => void
+        private readonly _onClickTarget: (domId: string) => void,
+        /** Asks for scene pointer events on a preview element the overlay draws. */
+        private readonly _onPointerTarget: (elementId: string) => void
     ) {
         this._guides = new PreviewBatch(_ctx);
         this._labels = new PreviewBatch(_ctx);
         this._playheads = new PreviewBatch(_ctx);
+        this._hits = new PreviewBatch(_ctx, true);
     }
 
     private _id(part: string, frameId: string): string {
@@ -150,6 +165,14 @@ export class FrameOverlay {
     public frameForBar(domId: string): string | null {
         const prefix = "serene-bar-";
         return domId.startsWith(prefix) ? domId.slice(prefix.length) : null;
+    }
+
+    private _pointable(elementId: string): string {
+        if (!this._pointerIds.has(elementId)) {
+            this._pointerIds.add(elementId);
+            this._onPointerTarget(elementId);
+        }
+        return elementId;
     }
 
     private _clickable(domId: string): string {
@@ -237,6 +260,79 @@ export class FrameOverlay {
         this._request();
     }
 
+    // ---- Dragging the playhead
+
+    public get isScrubbing(): boolean {
+        return this._scrub !== null;
+    }
+
+    /** The frame whose playhead handle is among `ids`, if any. */
+    public frameForHandle(ids: readonly string[]): string | null {
+        const prefix = `${this._ctx.driverId}:playhead-hit:`;
+        const hit = ids.find((id) => id.startsWith(prefix));
+        return hit ? hit.slice(prefix.length) : null;
+    }
+
+    public setHandleHover(frameId: string | null): void {
+        if (frameId === this._handleHover) return;
+        this._handleHover = frameId;
+        this._request();
+    }
+
+    private _progressAt(frameId: string, x: number): number | null {
+        const frame = this._frames.find((f) => f.id === frameId);
+        if (!frame || frame.rect.width <= 0) return null;
+        return Math.min(1, Math.max(0, (x - frame.rect.x) / frame.rect.width));
+    }
+
+    public async beginScrub(frameId: string, x: number): Promise<void> {
+        const progress = this._progressAt(frameId, x);
+        if (progress === null) return;
+        this._scrub = { frameId, progress };
+        this._request();
+        // A large invisible target keeps the drag's moves and release on Serene
+        // instead of starting a selection or a stroke on the board.
+        const { rect } = unwrap(
+            await this._ctx.issueCommand({ type: "command:camera:get-viewport-rect", ...stamp(this._ctx) })
+        );
+        if (!this._scrub) return;
+        this._shield = {
+            x: rect.x - rect.width * SHIELD_REACH,
+            y: rect.y - rect.height * SHIELD_REACH,
+            width: rect.width * (1 + SHIELD_REACH * 2),
+            height: rect.height * (1 + SHIELD_REACH * 2),
+        };
+        this._request();
+    }
+
+    public scrubTo(x: number): void {
+        if (!this._scrub) return;
+        const progress = this._progressAt(this._scrub.frameId, x);
+        if (progress === null || progress === this._scrub.progress) return;
+        this._scrub.progress = progress;
+        this._request();
+    }
+
+    /** Ends the drag and returns where it landed; the caller seeks playback there. */
+    public endScrub(): { frameId: string; progress: number } | null {
+        const scrub = this._scrub;
+        if (!scrub) return null;
+        this._scrub = null;
+        this._shield = null;
+        // Hold the playhead where it was dropped until playback reports back.
+        const playing = this._active?.id === scrub.frameId && this._active.playing;
+        this._active = { id: scrub.frameId, progress: scrub.progress, playing };
+        this._request();
+        return scrub;
+    }
+
+    public cancelScrub(): void {
+        if (!this._scrub) return;
+        this._scrub = null;
+        this._shield = null;
+        this._request();
+    }
+
     /** Show the guides on one frame while Range is adjusted in the panel. */
     public previewRange(): void {
         const target =
@@ -289,8 +385,15 @@ export class FrameOverlay {
         return (
             this._hovered === frame.id ||
             this._selection.has(frame.id) ||
-            this._active?.id === frame.id
+            this._active?.id === frame.id ||
+            this._scrub?.frameId === frame.id
         );
+    }
+
+    /** Where a frame's playhead sits: the drag position while dragging, else playback. */
+    private _progressOf(frame: OverlayFrame): number {
+        if (this._scrub?.frameId === frame.id) return this._scrub.progress;
+        return this._active?.id === frame.id ? this._active.progress : 0;
     }
 
     private async _sync(): Promise<void> {
@@ -298,19 +401,24 @@ export class FrameOverlay {
         const guides: DrawdyPreviewElementSchema[] = [];
         const labels: DrawdyPreviewElementSchema[] = [];
         const playheads: DrawdyPreviewElementSchema[] = [];
+        const hits: DrawdyPreviewElementSchema[] = [];
         for (const frame of frames) {
             labels.push(...this._bar(frame));
             if (this._guidesOn(frame)) {
                 guides.push(...this._ticks(frame));
                 labels.push(...this._rulerLabels(frame), ...this._noteLabels(frame));
             }
-            if (this._playheadOn(frame)) playheads.push(...this._playhead(frame));
+            if (this._playheadOn(frame)) {
+                playheads.push(...this._playhead(frame));
+                hits.push(this._handleHit(frame));
+            }
             if (frame.empty) labels.push(...this._emptyState(frame));
         }
         await Promise.all([
             this._guides.sync(guides),
             this._labels.sync(labels),
             this._playheads.sync(playheads),
+            this._hits.sync(this._shield ? [...hits, this._shieldElement(this._shield)] : hits),
         ]);
     }
 
@@ -466,13 +574,17 @@ export class FrameOverlay {
         const zoom = this._zoom;
         const { x, y, width, height } = frame.rect;
         const active = this._active?.id === frame.id ? this._active : null;
-        const px = x + (active?.progress ?? 0) * width;
-        const w = BOARD.handleWidth / zoom;
-        const h = BOARD.handleHeight / zoom;
-        const top = y - BOARD.handleAbove / zoom;
+        const scrubbing = this._scrub?.frameId === frame.id;
+        const progress = this._progressOf(frame);
+        const px = x + progress * width;
+        const grow = scrubbing || this._handleHover === frame.id ? HANDLE_ACTIVE_SCALE : 1;
+        const w = (BOARD.handleWidth * grow) / zoom;
+        const h = (BOARD.handleHeight * grow) / zoom;
+        // Grow about the handle's resting center.
+        const top = y + (BOARD.handleHeight / 2 - BOARD.handleAbove) / zoom - h / 2;
         const mid = top + h / 2;
-        const grip = 3 / zoom;
-        const idle = !active || (!active.playing && active.progress === 0);
+        const grip = (3 * grow) / zoom;
+        const idle = !scrubbing && (!active || (!active.playing && progress === 0));
         const gripLine = (part: string, dx: number, seed: number): DrawdyPreviewElementSchema => ({
             type: "line",
             drawdyElementId: this._id(part, frame.id),
@@ -508,13 +620,48 @@ export class FrameOverlay {
         ];
     }
 
+    private _handleHit(frame: OverlayFrame): DrawdyPreviewElementSchema {
+        const zoom = this._zoom;
+        const centerX = frame.rect.x + this._progressOf(frame) * frame.rect.width;
+        const centerY = frame.rect.y + (BOARD.handleHeight / 2 - BOARD.handleAbove) / zoom;
+        const width = HANDLE_HIT.width / zoom;
+        const height = HANDLE_HIT.height / zoom;
+        return {
+            ...this._rect(
+                this._pointable(this._id("playhead-hit", frame.id)),
+                { x: centerX - width / 2, y: centerY - height / 2, width, height },
+                this._styling.primary,
+                "transparent",
+                0,
+                65
+            ),
+            opacity: 0,
+        };
+    }
+
+    private _shieldElement(rect: Rect): DrawdyPreviewElementSchema {
+        return {
+            ...this._rect(
+                this._pointable(`${this._ctx.driverId}:playhead-shield`),
+                rect,
+                this._styling.primary,
+                "transparent",
+                0,
+                66
+            ),
+            opacity: 0,
+        };
+    }
+
     private _timeText(frame: OverlayFrame): string {
         const duration = frame.rect.width / this._settings.pxPerSecond;
         const active = this._active?.id === frame.id ? this._active : null;
-        if (!active || (!active.playing && active.progress === 0)) {
+        const scrubbing = this._scrub?.frameId === frame.id;
+        const progress = this._progressOf(frame);
+        if (!scrubbing && (!active || (!active.playing && progress === 0))) {
             return formatClock(duration);
         }
-        return `${formatClock(active.progress * duration)} / ${formatClock(duration)}`;
+        return `${formatClock(progress * duration)} / ${formatClock(duration)}`;
     }
 
     private _bar(frame: OverlayFrame): DrawdyPreviewElementSchema[] {

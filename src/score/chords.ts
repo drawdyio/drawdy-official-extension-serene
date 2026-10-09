@@ -10,14 +10,23 @@ export function isArp(rhythm: Rhythm): rhythm is ArpPattern {
     return typeof rhythm === "string";
 }
 
+export type BackingStyle = "pop" | "classic" | "simple" | "drone";
+
+export const BACKING_STYLES: { id: BackingStyle; label: string }[] = [
+    { id: "pop", label: "Pop" },
+    { id: "classic", label: "Classic" },
+    { id: "simple", label: "Simple" },
+    { id: "drone", label: "Drone" },
+];
+
 export type BackingOptions = {
-    progression: number;
+    style: BackingStyle;
     voicing: Voicing;
     rhythm: Rhythm;
 };
 
 export type ChordSpec = { degree: number; inversion: number };
-export type Progression = { name: string; label: string; chords: ChordSpec[] };
+export type Progression = { name: string; chords: ChordSpec[] };
 
 const BASS_OCTAVE_MIDI = 36;
 const CHORD_OCTAVE_MIDI = 48;
@@ -66,44 +75,58 @@ function chord(symbol: string): ChordSpec {
     return { degree, inversion: suffix === "6" ? 1 : 0 };
 }
 
-function progression(label: string, symbols: string): Progression {
+function progression(symbols: string): Progression {
     return {
         name: symbols,
-        label,
         chords: symbols.split(" ").map(chord),
     };
 }
 
+const MAJOR_STYLES: Partial<Record<BackingStyle, Progression>> = {
+    pop: progression("I vi IV V"),
+    classic: progression("I iii IV V"),
+    simple: progression("I V"),
+    drone: progression("I"),
+};
+
 /**
- * The same four backings in every scale. Chord qualities follow the mode
- * because the triads are built diatonically from the harmony scale.
+ * Each backing style is the scale's own progression of that kind, so chord
+ * qualities follow the mode. A style a scale has no progression for is left
+ * out; every scale has a drone on its tonic.
  */
-export const PROGRESSIONS: Progression[] = [
-    progression("Pop", "I vi IV V"),
-    progression("Classic", "I iii IV V"),
-    progression("Simple", "I V"),
-    progression("Drone", "I"),
-];
+const STYLE_PROGRESSIONS: Record<ScaleId, Partial<Record<BackingStyle, Progression>>> = {
+    major: MAJOR_STYLES,
+    "major-pentatonic": MAJOR_STYLES,
+    dorian: {
+        pop: progression("i III IV"),
+        classic: progression("i III/6 IV/6"),
+        simple: progression("i IV"),
+        drone: progression("i"),
+    },
+    mixolydian: {
+        classic: progression("I vii"),
+        simple: progression("I v"),
+        drone: progression("I"),
+    },
+    lydian: {
+        pop: progression("I II V"),
+        simple: progression("I II"),
+        drone: progression("I"),
+    },
+    japanese: { drone: progression("I") },
+};
 
-const AEOLIAN_STEPS = [0, 2, 3, 5, 7, 8, 10];
-
-/** Five-note scales borrow the seven-note scale that contains them. */
 export function harmonyScale(scale: Scale): Scale {
-    if (scale.id === "major-pentatonic") return getScale("major");
-    if (scale.id === "minor-pentatonic" || scale.id === "japanese") {
-        return { ...scale, steps: AEOLIAN_STEPS };
-    }
-    return scale;
+    return scale.id === "major-pentatonic" ? getScale("major") : scale;
 }
 
-export function progressionsFor(_scaleId: ScaleId): Progression[] {
-    return PROGRESSIONS;
+export function progressionFor(scaleId: ScaleId, style: BackingStyle): Progression | null {
+    return STYLE_PROGRESSIONS[scaleId][style] ?? null;
 }
 
-export function pickProgression(scaleId: ScaleId, index: number): Progression {
-    const list = progressionsFor(scaleId);
-    const clamped = Math.min(list.length - 1, Math.max(0, Math.floor(index)));
-    return list[clamped];
+/** The styles a scale offers, in tab order. */
+export function stylesFor(scaleId: ScaleId): BackingStyle[] {
+    return BACKING_STYLES.map((s) => s.id).filter((id) => progressionFor(scaleId, id) !== null);
 }
 
 function triadSemitones(scale: Scale, degree: number): number[] {
@@ -242,6 +265,15 @@ export function progressionCount(frameWidth: number): number {
     return Math.max(1, Math.round(frameWidth / PROGRESSION_SPAN_PX));
 }
 
+const PREVIEW_CHORD_SEC = 0.8;
+
+/** One pass of a backing on its own, for previewing a style. */
+export function backingPreview(scale: Scale, options: BackingOptions): BackingHit[] {
+    const prog = progressionFor(scale.id, options.style);
+    if (!prog) return [];
+    return backingHits(scale, PROGRESSION_SPAN_PX, prog.chords.length * PREVIEW_CHORD_SEC, options);
+}
+
 export type BackingHit = {
     startSec: number;
     durationSec: number;
@@ -256,7 +288,8 @@ export function backingHits(
     durationSec: number,
     options: BackingOptions
 ): BackingHit[] {
-    const prog = pickProgression(scale.id, options.progression);
+    const prog = progressionFor(scale.id, options.style);
+    if (!prog) return [];
     const harmony = harmonyScale(scale);
     const count = progressionCount(frameWidth);
     const progressionSec = durationSec / count;

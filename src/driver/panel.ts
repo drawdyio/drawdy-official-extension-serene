@@ -1,6 +1,6 @@
 import { ModuleStyling } from "@drawdy/driver-protocol";
-import { PROGRESSIONS } from "../score/chords";
-import { SCALES, midiToHz, rowToHz } from "../score/pitch";
+import { BACKING_STYLES, BackingStyle, progressionFor } from "../score/chords";
+import { SCALES, ScaleId, midiToHz, rowToHz } from "../score/pitch";
 import { Score, Voice } from "../score/score";
 import { Ctx, stamp } from "./context";
 import { FrameSummary } from "./frame-list";
@@ -43,6 +43,9 @@ export type SerializedScore = {
     frameIds: string[];
 };
 
+/** A note of a backing preview: start and length in seconds, `a` for arpeggio notes. */
+export type PreviewNote = { t: number; d: number; midi: number; v: number; a: boolean };
+
 export type ScaleOption = {
     id: string;
     name: string;
@@ -50,7 +53,6 @@ export type ScaleOption = {
     /** Semitones above C, for the hover preview. */
     steps: number[];
 };
-export type BackingOption = { name: string; progression: string };
 
 export type PanelToDriver =
     | { type: "ready" }
@@ -68,7 +70,8 @@ export type PanelToDriver =
     | { type: "add-frame" }
     | { type: "focus-frame"; id: string }
     | { type: "play-frame"; id: string }
-    | { type: "rename-frame"; id: string; name: string };
+    | { type: "rename-frame"; id: string; name: string }
+    | { type: "preview-backing"; style: string };
 
 export type DriverToPanel =
     | { type: "theme"; css: string }
@@ -77,9 +80,10 @@ export type DriverToPanel =
     | { type: "frames"; frames: FrameSummary[] }
     | { type: "selection"; ids: string[] }
     | { type: "edit-frame-name"; id: string }
+    | { type: "backing-preview"; style: string; notes: PreviewNote[] }
     | { type: "settings"; values: SereneSettings }
     | { type: "seek"; t: number }
-    | { type: "backing"; options: BackingOption[]; value: BackingSettings }
+    | { type: "backing"; styles: BackingStyleOption[]; value: BackingSettings }
     | { type: "stop" };
 
 export function stylingCssVars(styling: ModuleStyling): string {
@@ -148,10 +152,17 @@ export async function openPanel(
     });
 }
 
-export const backingOptions = (): BackingOption[] =>
-    PROGRESSIONS.map((progression) => ({
-        name: progression.label,
-        progression: progression.name,
+export type BackingStyleOption = {
+    id: BackingStyle;
+    label: string;
+    /** The scale's chords for this style, or null when it has none. */
+    progression: string | null;
+};
+
+export const backingStyles = (scaleId: ScaleId): BackingStyleOption[] =>
+    BACKING_STYLES.map((style) => ({
+        ...style,
+        progression: progressionFor(scaleId, style.id)?.name ?? null,
     }));
 
 export const scaleOptions = (): ScaleOption[] =>
