@@ -1182,6 +1182,11 @@ button.section-head { cursor: pointer; }
 .icon-btn[aria-pressed="true"]:hover { background: linear-gradient(var(--hover), var(--hover)), var(--layer); }
 .icon-btn:disabled { color: var(--fg-disabled); cursor: default; background: var(--surface); }
 .icon-btn.attention { animation: attention 1.4s ease-in-out infinite; }
+.icon-btn .stroke-icon { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Loop off keeps a muted icon, hover included; on uses the selected layer. */
+.icon-btn.loop { margin-right: -4px; }
+.icon-btn.loop:not([aria-pressed="true"]),
+.icon-btn.loop:not([aria-pressed="true"]):hover { color: var(--fg-3); }
 /* The frame whose title was clicked on the board. */
 .icon-btn.spotlight { outline: 2px solid #c5f601; outline-offset: 1px; }
 @keyframes attention {
@@ -1329,6 +1334,7 @@ button.section-head { cursor: pointer; }
     var WHITE_KEYS = 50;
     var THUMB_WIDTH = 160;
     var PLAY_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6L9.8 6z"/></svg>';
+    var LOOP_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path class="stroke-icon" d="M2.5 5.5V5a2 2 0 0 1 2-2h5M8 1.5 9.5 3 8 4.5M9.5 6.5V7a2 2 0 0 1-2 2h-5M4 10.5 2.5 9 4 7.5"/></svg>';
     var PAUSE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 2.5h2v7H3zM7 2.5h2v7H7z"/></svg>';
 
     var settings = {
@@ -2931,6 +2937,20 @@ button.section-head { cursor: pointer; }
         bindName(text.querySelector(".name-text"), frame);
         row.appendChild(text);
 
+        // Loop is one setting for every frame; each row shows and flips it.
+        var loopBtn = document.createElement("button");
+        loopBtn.type = "button";
+        loopBtn.className = "icon-btn loop";
+        loopBtn.innerHTML = LOOP_ICON;
+        loopBtn.addEventListener("click", function () {
+            setLoop(!loop);
+            api.postMessage({ type: "loop", value: loop });
+            renderRowStates();
+            showTip(loopBtn, loopTip());
+        });
+        bindTip(loopBtn, loopTip);
+        row.appendChild(loopBtn);
+
         var play = document.createElement("button");
         play.type = "button";
         play.className = "icon-btn play";
@@ -2938,7 +2958,7 @@ button.section-head { cursor: pointer; }
 
         row.addEventListener("click", function (event) {
             // The second click of a double-click on the name starts a rename instead.
-            if (event.target.closest(".play, .name-input") || event.detail > 1) return;
+            if (event.target.closest(".play, .loop, .name-input") || event.detail > 1) return;
             api.postMessage({ type: "focus-frame", id: frame.id });
         });
         row.addEventListener("keydown", function (event) {
@@ -3077,6 +3097,10 @@ button.section-head { cursor: pointer; }
 
     document.addEventListener("pointerdown", clearSpotlight, true);
 
+    function loopTip() {
+        return loop ? "Loop is on" : "Loop is off";
+    }
+
     function playFrame(id) {
         if (isPlayingFrame(id)) {
             pause();
@@ -3110,6 +3134,9 @@ button.section-head { cursor: pointer; }
             play.setAttribute("aria-pressed", on ? "true" : "false");
             play.classList.toggle("attention", attentionId === id && !on);
             play.classList.toggle("spotlight", spotlightId === id);
+            var loopBtn = row.querySelector(".loop");
+            loopBtn.setAttribute("aria-pressed", loop ? "true" : "false");
+            loopBtn.setAttribute("aria-label", loop ? "Loop is on" : "Loop is off");
         });
     }
 

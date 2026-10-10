@@ -13,7 +13,7 @@ scale, so nothing ever sounds wrong ✧˖°
 1. Click the **piano** in the extension rail.
 2. Hit **Create Serene frame**.
 3. Draw anything inside the frame.
-4. Press **▶** in the Serene panel and listen ♡
+4. Press **▶** in the Serene panel and listen ♡ Turn on the loop button to make it keeps going
 
 > (・_・;) **no sound?** Click once anywhere in the Serene panel, then try
 > again.

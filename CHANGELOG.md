@@ -12,7 +12,8 @@
 - Feel is a collapsible section of sliders: Speed (0.5× to 2.0×), Attack, Notes, Backing (while a backing is on) and Reverb. Double-click a slider to reset it.
 - Frames list with a thumbnail of each frame's strokes, its duration at the current Speed and a play/pause button. Click a row to jump to the frame; double-click its name to rename it.
 - With no Serene frames on the board, the panel offers **Create Serene frame** instead of adding one on its own.
-- Removed the panel's big play button, timer and Loop toggle.
+- Each frame row has a Loop button next to its play button. Loop is one setting for every frame: with it on, playback starts over at the end instead of stopping.
+- Removed the panel's big play button and timer.
 - Speed is now a multiplier; 1.0× is the previous default rate of 220 px per second, and a saved speed carries over. The sound, progressions and other defaults are unchanged.
 
 ### Board
