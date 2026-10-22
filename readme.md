@@ -6,6 +6,8 @@ Doodle anything, press play, and listen to your drawing turn into a little
 song. Higher lines sing higher notes, and every note lands on a pretty
 scale, so nothing ever sounds wrong ✧˖°
 
+![Clicking Create Serene frame, drawing a wave and four dots inside the frame with the pencil, switching Backing to Pop, then pressing play while the playhead sweeps across the drawing](https://raw.githubusercontent.com/drawdyio/drawdy-official-extension-serene/main/docs/media/serene.gif)
+
 ---
 
 ## let's play ٩(◕‿◕)۶
